@@ -135,7 +135,7 @@ function WakePhraseEditor({ phrases, setPhrases, defaults }: {
         )}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-        <input id="wake_phrase_new" value={draft} placeholder="e.g. hey sam"
+        <input id="wake_phrase_new" value={draft} placeholder="e.g. sam"
           onChange={(e) => { setDraft(e.target.value); setError(""); }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
           style={{ ...INPUT_STYLE, flex: "1 1 200px", padding: "7px 10px", fontSize: 13 }} />
