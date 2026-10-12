@@ -727,7 +727,7 @@ with the `:3` intensifier.
 
 Every STT-final-confirmed wake-word turn reaches dispatch. It opens the
 follow-up focus window (owner setting `wake_followup_s`; else
-`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`: 5 s in the lamp profile, code default 10 s), so the next spoken turn can omit the wake phrase and
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`: 5 s in the lamp and intern-v2 profiles, code default 10 s), so the next spoken turn can omit the wake phrase and
 is sent as `voice_followup`. For an authorized turn, the idle countdown starts
 when processing and its owned TTS queue have both finished, not at dispatch or
 the first filler. Vision/grounding, main-agent work, synthesis and queued answer
@@ -3593,7 +3593,7 @@ is a top-level `config.json` flag:
 | `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Harness text handed to the renderer is cut to this length. |
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Fallback summarizer bound before sanitized text is spoken instead. |
 | `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | With Automatic non-Live wake gating, suppress automatic filler/backchannel on captures that start with an already-open wake window. Standard and Pro enable it; pro-xvf3800 and pro-respeaker-lite disable it. |
-| `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `10` (lamp image `.env`: `5`) | Fallback when `config.json` `wake_followup_s` (Settings → General "Keep listening for", 3–30 s) is unset; the owner setting wins. Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
+| `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `10` (lamp and intern-v2 image `.env`: `5`) | Fallback when `config.json` `wake_followup_s` (Settings → General "Keep listening for", 3–30 s) is unset; the owner setting wins. Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. With the shared gate enabled this only proposes an endpoint; `HAL_TURN_END_*` decides closure. |
 | `HAL_TURN_END_ENABLED` | `true` | Shared provisional endpoint gate for non-Live hands-free capture before commit; no change to Live or manual capture. `false` restores legacy silence clocks and session ceiling. |
 | `HAL_TURN_END_FALLBACK_S` | `2.5` | Minimum silence for ordinary text when Smart Turn is unavailable/pending, and for a short greeting; the original silence candidate must also fire. |

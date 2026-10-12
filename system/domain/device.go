@@ -1186,8 +1186,9 @@ type ConfigPublicResponse struct {
 	WakePhrasesDefault []string `json:"wake_phrases_default"`
 	// WakeChime is the effective wake chime toggle (default true).
 	WakeChime bool `json:"wake_chime"`
-	// WakeFollowupS is the effective listening window after a wake, in seconds.
-	WakeFollowupS int `json:"wake_followup_s"`
+	// WakeFollowupS is the owner's listening window after a wake, in seconds; nil when
+	// unset, so the UI asks HAL (GET /voice/wake-followup) for the image default in effect.
+	WakeFollowupS *int `json:"wake_followup_s,omitempty"`
 	// WakeLight is the saved wake light; WakeLightEnabled is its effective toggle.
 	WakeLight        *config.WakeLight `json:"wake_light,omitempty"`
 	WakeLightEnabled bool              `json:"wake_light_enabled"`

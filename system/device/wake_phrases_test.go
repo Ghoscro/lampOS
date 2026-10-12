@@ -84,8 +84,11 @@ func TestWakeFollowupDefaultsAndPersists(t *testing.T) {
 	}
 	applyUpdate(c, domain.UpdateConfigRequest{TTSVoice: "x"}, "")
 	s := &Service{config: c}
-	if got := s.GetPublicConfig().WakeFollowupS; got != 15 {
-		t.Fatalf("public window = %d, want 15", got)
+	if got := s.GetPublicConfig().WakeFollowupS; got == nil || *got != 15 {
+		t.Fatalf("public window = %v, want 15", got)
+	}
+	if (&Service{config: baseConfig()}).GetPublicConfig().WakeFollowupS != nil {
+		t.Fatal("an unset window must stay unset so the UI shows HAL's image default")
 	}
 }
 

@@ -204,3 +204,13 @@ def test_wake_light_cannot_be_off_together_with_the_chime(tmp_path, monkeypatch)
     assert not wake_light.enabled()
     _write_config(tmp_path, monkeypatch, {"wake_light": {"enabled": False}, "wake_chime": False})
     assert wake_light.enabled()  # a hand-edited config still gives the wake a cue
+
+
+def test_wake_followup_route_reports_the_window_in_effect(tmp_path, monkeypatch):
+    from hal.routes.voice import get_wake_followup
+
+    monkeypatch.setattr(hal_config, "WAKEWORD_FOLLOWUP_TIMEOUT_S", 5.0)  # lamp image .env
+    _write_config(tmp_path, monkeypatch, {})
+    assert get_wake_followup() == {"seconds": 5.0, "image_default_s": 5.0}
+    _write_config(tmp_path, monkeypatch, {"wake_followup_s": 12})
+    assert get_wake_followup()["seconds"] == 12.0

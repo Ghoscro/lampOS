@@ -258,6 +258,18 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setWakePhrasesDefault(cfg.wake_phrases_default ?? []);
         setWakeChime(cfg.wake_chime ?? true);
         setWakeFollowupS(cfg.wake_followup_s ?? WAKE_FOLLOWUP_DEFAULT_S);
+        if (cfg.wake_followup_s == null) {
+          // Unset: show the window the device actually uses (an image .env may set it, e.g. lamp 5 s).
+          fetch(hwUrl("/voice/wake-followup"))
+            .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+            .then((r: { seconds: number }) => {
+              const seconds = Math.round(r.seconds);
+              if (!(seconds > 0)) return;
+              setWakeFollowupS(seconds);
+              setBaseline((b) => (b ? { ...b, wakeFollowupS: seconds } : b));
+            })
+            .catch(() => {});
+        }
         setWakeLightOn(cfg.wake_light_enabled ?? true);
         setWakeLook(wakeLookFrom(cfg.wake_light));
         if (cfg.realtime) {

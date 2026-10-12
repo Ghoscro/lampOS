@@ -708,7 +708,7 @@ dùng `keyterm`; các model nova cũ hơn dùng `keywords` kèm intensifier `:3`
 
 Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nó mở một
 cửa sổ focus follow-up (cài đặt `wake_followup_s` của chủ máy; nếu không đặt thì
-`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`: profile lamp 5 giây, mặc định code 10 giây), nên câu tiếp theo có thể bỏ wake phrase và
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`: profile lamp và intern-v2 là 5 giây, mặc định code 10 giây), nên câu tiếp theo có thể bỏ wake phrase và
 được gửi với type `voice_followup`. Với turn đã được phép, thời gian chờ chỉ bắt
 đầu khi cả xử lý lẫn queue TTS của turn đã xong, không phải lúc dispatch hay filler
 đầu tiên. Vision/grounding, main agent, tổng hợp và các đoạn trả lời đang xếp hàng
@@ -3511,7 +3511,7 @@ trong `config.json`:
 | `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Văn bản Harness đưa cho bộ diễn đạt bị cắt tới độ dài này. |
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Giới hạn thời gian của summarizer fallback trước khi đọc văn bản đã làm sạch thay thế. |
 | `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | Với Automatic, Live tắt và wake gate bật, chặn filler/backchannel tự động nếu wake window đã mở khi bắt đầu thu. Lamp Standard và Pro bật; pro-xvf3800 và pro-respeaker-lite tắt. |
-| `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `10` (`.env` image lamp: `5`) | Giá trị dự phòng khi `wake_followup_s` trong `config.json` (Settings → General "Keep listening for", 3–30 s) chưa đặt; cài đặt của chủ máy được ưu tiên. Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
+| `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `10` (`.env` image lamp và intern-v2: `5`) | Giá trị dự phòng khi `wake_followup_s` trong `config.json` (Settings → General "Keep listening for", 3–30 s) chưa đặt; cài đặt của chủ máy được ưu tiên. Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. |
 | `HAL_TURN_END_ENABLED` | `true` | Gate kết thúc lượt tạm thời dùng chung cho thu hands-free khi Live tắt, trước commit; không đổi Live hoặc thu thủ công. `false` khôi phục đồng hồ im lặng và trần phiên cũ. |
 | `HAL_TURN_END_FALLBACK_S` | `2.5` | Im lặng tối thiểu cho transcript thông thường khi Smart Turn thiếu/đang chờ, và cho lời chào ngắn; ứng viên im lặng gốc cũng phải đủ điều kiện. |
