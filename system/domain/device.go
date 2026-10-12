@@ -342,6 +342,9 @@ const (
 	KindWakeWordGate   = "wakeword.gate"
 	KindVoiceInputMode = "voice.input_mode"
 	KindTimezoneSet    = "timezone.set"
+
+	// KindCloudPerceptionSet turns camera cloud perceptions off; MQTT cannot turn them on.
+	KindCloudPerceptionSet = "cloud_perception.set"
 	// KindDeviceSoftReset wipes config.json and restarts os-server into AP setup mode (no reboot).
 	KindDeviceSoftReset = "device.soft_reset"
 
@@ -616,6 +619,10 @@ type MQTTInfoResponse struct {
 	// WakeWordEnabled is never omitted so disabled differs from an older device not reporting it.
 	WakeWordEnabled bool   `json:"wakeword_enabled"`
 	VoiceInputMode  string `json:"voice_input_mode"`
+
+	// CloudPerception is the saved camera cloud opt-in state; never omitted.
+	CloudPerception config.CloudPerception `json:"cloud_perception"`
+
 	// Timezone is the active IANA zone (e.g. "Asia/Ho_Chi_Minh").
 	Timezone          string `json:"timezone,omitempty"`
 	HalVersion        string `json:"hal_version,omitempty"`
@@ -651,6 +658,7 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 		STTLanguage:     cfg.STTLanguage,
 		WakeWordEnabled: cfg.WakeWordEnabled(),
 		VoiceInputMode:  cfg.GetVoiceInputMode(),
+		CloudPerception: cfg.CloudPerceptionSettings(),
 		Timezone:        cfg.Timezone,
 	}
 }
@@ -968,6 +976,23 @@ type WakeWordGateData struct {
 	Enabled *bool `json:"enabled" validate:"required"`
 }
 
+// CloudPerceptionSetData lists the perceptions to change; omitted keys keep their value.
+type CloudPerceptionSetData struct {
+	Motion     *bool `json:"motion,omitempty"`
+	Emotion    *bool `json:"emotion,omitempty"`
+	Pose       *bool `json:"pose,omitempty"`
+	FireHazard *bool `json:"fire_hazard,omitempty"`
+}
+
+// MQTTCloudPerceptionAck is the cloud_perception.set ack; status is "starting" | "success" | "failure".
+type MQTTCloudPerceptionAck struct {
+	MQTTInfoResponse
+	Kind   string                  `json:"kind"`
+	Status string                  `json:"status"`
+	Error  string                  `json:"error,omitempty"`
+	Data   *config.CloudPerception `json:"data,omitempty"`
+}
+
 // MQTTWakeWordGateAck is the wakeword.gate ack; status is "starting" | "success" | "failure".
 type MQTTWakeWordGateAck struct {
 	MQTTInfoResponse
@@ -1201,6 +1226,9 @@ type ConfigPublicResponse struct {
 	FAChannel        string            `json:"fa_channel"`
 	FDChannel        string            `json:"fd_channel"`
 
+	// CloudPerception is never omitted so the web can render every toggle.
+	CloudPerception config.CloudPerception `json:"cloud_perception"`
+
 	Realtime RealtimePublic `json:"realtime"`
 
 	// Presence booleans replace raw secret values.
@@ -1289,6 +1317,9 @@ type UpdateConfigRequest struct {
 	// WakeLight replaces the wake light look and toggle; nil keeps it.
 	WakeLight      *config.WakeLight `json:"wake_light,omitempty"`
 	VoiceInputMode *string           `json:"voice_input_mode,omitempty" binding:"omitempty,oneof=automatic tap_to_talk"`
+
+	// CloudPerception replaces all camera cloud opt-ins; omit to leave them unchanged.
+	CloudPerception *config.CloudPerception `json:"cloud_perception,omitempty"`
 
 	// Realtime is the same payload as MQTT realtime.set; omit to leave it unchanged.
 	Realtime *RealtimeSetData `json:"realtime,omitempty"`

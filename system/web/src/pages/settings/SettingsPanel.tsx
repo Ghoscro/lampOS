@@ -13,6 +13,7 @@ import { RestoreDefaultsButton } from "@/components/setup/shared";
 import { WifiSection } from "@/pages/settings/WifiSection";
 import { VoiceSection as EditVoiceSection } from "@/pages/settings/VoiceSection";
 import { FaceSection as EditFaceSection } from "@/pages/settings/FaceSection";
+import { PrivacySection } from "@/pages/settings/PrivacySection";
 import { TTSSection, type TtsLoadedState } from "@/pages/settings/TTSSection";
 import { detectChoice } from "@/pages/settings/ttsProvider";
 import { RealtimeSection } from "@/pages/settings/RealtimeSection";
@@ -28,7 +29,7 @@ import { ScheduledSection } from "@/pages/settings/ScheduledSection";
 import { confirmWifiConnection, isWifiHandoffError } from "@/pages/settings/wifiReconnect";
 import { FacebookSection } from "@/pages/settings/FacebookSection";
 
-export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "led" | "scheduled" | "facebook";
+export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "privacy" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "led" | "scheduled" | "facebook";
 
 const SECTION_LABELS: Record<SettingsSectionId, string> = {
   device: "General",
@@ -37,6 +38,7 @@ const SECTION_LABELS: Record<SettingsSectionId, string> = {
   runtime: "Runtime",
   voice: "My Voice",
   face: "Face",
+  privacy: "Privacy",
   tts: "Voice",
   realtime: "Realtime",
   stt: "Language",
@@ -648,7 +650,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeWebSearch,
   ]);
 
-  const showSave = activeSection !== "mcp" && activeSection !== "plugins" && activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "led" && activeSection !== "scheduled" && activeSection !== "facebook";
+  const showSave = activeSection !== "mcp" && activeSection !== "plugins" && activeSection !== "face" && activeSection !== "privacy" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "led" && activeSection !== "scheduled" && activeSection !== "facebook";
 
   return (
     <div className={`lm-fade-in lm-settings-panel${activeSection !== "device" ? " lm-settings-polished" : ""}`} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -790,6 +792,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               faceOwners={faceOwners}
               loadFaceOwners={loadFaceOwners}
             />
+
+            <PrivacySection active={activeSection === "privacy"} />
 
             <TTSSection
               active={activeSection === "tts"}
