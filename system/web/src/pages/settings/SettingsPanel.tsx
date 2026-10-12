@@ -181,6 +181,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [ttsLoaded, setTtsLoaded] = useState<TtsLoadedState>({ apiKey: false, baseUrl: false, choice: "autonomous" });
   const [hasDefaults, setHasDefaults] = useState(false);
   const [llmConfigMode, setLlmConfigMode] = useState<LLMConfigMode>("");
+  const [runtimeLoginBusy, setRuntimeLoginBusy] = useState(false);
   const [llmModeApplyPending, setLlmModeApplyPending] = useState(false);
   const [llmMode, setLlmMode] = useState<LlmMode>("autonomous");
   const [realtimeLoaded, setRealtimeLoaded] = useState({ apiKey: false });
@@ -473,6 +474,10 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
+    if (runtimeLoginBusy) {
+      setError("Finish or cancel account sign-in before saving Settings.");
+      return;
+    }
     setError(null);
     setWifiNotice(null);
     // Backend has no min length, so enforce ADMIN_PASSWORD_MIN when rotating.
@@ -623,7 +628,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     bluebubblesServerUrl, bluebubblesPassword, bluebubblesUserAddress,
     bluebubblesCallerContext,
     ssid, password, adminPassword, llmUrl,
-    llmApiKey, llmModel, llmDisableThinking, llmConfigMode, llmModeApplyPending, deepgramApiKey, sttApiKey, sttBaseUrl,
+    llmApiKey, llmModel, llmDisableThinking, llmConfigMode, llmModeApplyPending, runtimeLoginBusy, deepgramApiKey, sttApiKey, sttBaseUrl,
     sttProvider, sttLanguage, sttLoaded,
     ttsApiKey, ttsBaseUrl, ttsLoaded, ttsProvider, ttsVoice, ttsSpeed, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
@@ -648,7 +653,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
             <button
               form="edit-form"
               type="submit"
-              disabled={saving || loadingCfg || !dirty}
+              disabled={saving || runtimeLoginBusy || loadingCfg || !dirty}
               style={{
                 padding: "6px 18px", borderRadius: 8, fontSize: 12, fontWeight: 600,
                 cursor: saving || loadingCfg || !dirty ? "not-allowed" : "pointer",
@@ -745,6 +750,15 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               savedLlmConfigMode={baseline?.llmConfigMode ?? ""}
               llmModeApplyPending={llmModeApplyPending}
               onLlmConfigModeChange={setLlmConfigMode}
+              onLoginBusyChange={setRuntimeLoginBusy}
+              onAccountConnected={(historical) => {
+                // GET only exposes completed success while the saved mode is runtime.
+                // Reconcile a load/activation race without discarding an explicit mode draft.
+                if (historical && (llmModeApplyPending || llmConfigMode !== baseline?.llmConfigMode)) return;
+                setLlmConfigMode("runtime");
+                setBaseline((previous) => previous ? { ...previous, llmConfigMode: "runtime" } : previous);
+                setLlmModeApplyPending(false);
+              }}
               saving={saving}
             />
 
