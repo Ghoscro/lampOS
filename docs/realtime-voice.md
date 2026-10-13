@@ -32,6 +32,13 @@ rebuild finishes during capture, buffered audio resumes immediately; if it is
 still running at the endpoint, the existing readiness wait is capped at two
 seconds before fallback. Cancellation never uploads a late completed take.
 
+Post-capture Silero checks reuse one valid metrics result within the same capture
+only when PCM bytes, sample rate and detector identity match exactly. Changed or
+trimmed audio is analyzed again. Admission thresholds and fail-open/fail-closed
+policy are reapplied on every call; unavailable, failed and sentinel results are
+not cached. This removes repeated inference on identical audio, not the first
+speech check, and does not change endpoint thresholds.
+
 ## Experimental independent microphone capture
 
 `HAL_CONTINUOUS_MIC_CAPTURE=true` opts automatic, non-LIVE ALSA capture into an

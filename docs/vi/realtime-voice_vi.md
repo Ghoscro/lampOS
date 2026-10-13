@@ -29,6 +29,13 @@ khác và STT preconnected giữ vòng đời hiện có. Gemini reconnect xong 
 thu thì gửi tiếp audio buffer ngay; nếu đến endpoint vẫn đang reconnect, chờ
 readiness tối đa hai giây rồi fallback. Lượt đã hủy không upload muộn.
 
+Kiểm tra Silero sau capture tái sử dụng tối đa một kết quả metrics hợp lệ trong
+chính lượt đó, chỉ khi byte PCM, sample rate và detector giống hệt. Audio đã đổi
+hoặc trim vẫn chạy lại. Mỗi lần gọi vẫn xét ngưỡng và chính sách fail-open/
+fail-closed; không cache kết quả unavailable, lỗi hay sentinel. Thay đổi chỉ bỏ
+inference lặp trên cùng audio, không bỏ lần kiểm tra speech đầu và không đổi
+ngưỡng chốt câu.
+
 ## Thử nghiệm luồng đọc microphone riêng
 
 `HAL_CONTINUOUS_MIC_CAPTURE=true` bật luồng đọc riêng sau AEC cho ALSA automatic,
