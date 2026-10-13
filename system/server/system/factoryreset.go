@@ -116,10 +116,8 @@ func FactoryReset(c *gin.Context, gw domain.AgentGateway) {
 		}
 	}
 	_, cookieErr := c.Cookie("os_session")
-	log.Printf("[factory-reset] TRIGGER received — remote=%s xff=%q x-real-ip=%q user-agent=%q auth=%q session-cookie=%v",
-		c.Request.RemoteAddr,
-		c.GetHeader("X-Forwarded-For"),
-		c.GetHeader("X-Real-IP"),
+	// Client IPs are not logged: this line ships to the remote log collector.
+	log.Printf("[factory-reset] TRIGGER received — user-agent=%q auth=%q session-cookie=%v",
 		c.Request.UserAgent(),
 		authScheme,
 		cookieErr == nil,
