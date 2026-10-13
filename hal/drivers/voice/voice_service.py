@@ -80,6 +80,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
     SpeakerDecorator,
     merge_stt_hypothesis,
     merge_wake_words,
+    wake_name_of,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.drivers.voice._internal.turn_endpoint import TurnEndpoint
@@ -317,6 +318,7 @@ class VoiceService:
             wake_words=self._effective_wake_words(wake_words or []),
             nudge_cooldown_s=voice_cfg.ENROLL_NUDGE_COOLDOWN_S,
             enable_people_perception=enable_people_perception,
+            name_anywhere=voice_cfg.WAKE_NAME_ANYWHERE,
         )
         self._device_pipeline = DeviceVoicePipeline(
             self._device_turn_queue, create_session=self._stt.create_session,
@@ -430,6 +432,9 @@ class VoiceService:
         custom = hal_config.custom_wake_phrases()
         if custom:
             return merge_wake_words(custom)
+        if voice_cfg.WAKE_NAME_ANYWHERE:
+            # os-server pushes greeting phrases ("hey sam"); a name alone already covers them.
+            agent_words = [wake_name_of(w) for w in agent_words]
         return merge_wake_words(self._device_wake_words, agent_words)
 
     def set_wake_words(self, words: list) -> None:
