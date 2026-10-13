@@ -849,7 +849,7 @@ class VoiceService:
         if self._silero_vad is not None:
             self._silero_vad.reset_state()
 
-    def _rt_noise_is_speech(self, pcm_int16, *, fail_open=True) -> bool:
+    def _rt_noise_is_speech(self, pcm_int16, *, fail_open=True, metrics_cache=None) -> bool:
         """Realtime noise guard: is `pcm_int16` (STT_RATE PCM16 samples) speech?
 
         Legacy transcript-backed checks fail open. Audio-only admission passes
@@ -866,10 +866,27 @@ class VoiceService:
         try:
             if not fail_open and not self._rt_noise_vad.available:
                 return False
-            peak, mean, ratio, span_ratio, span_seconds = self._rt_noise_vad.speech_metrics(
-                pcm_int16, voice_cfg.STT_RATE
-            )
-            self._rt_noise_vad.reset_state()
+            # Cache raw evidence, never an admission decision. One exact PCM
+            # entry belongs to this capture; trims and detector changes miss.
+            cache_key = None
+            if metrics_cache is not None and self._rt_noise_vad.available is True:
+                pcm_bytes = pcm_int16.tobytes() if hasattr(pcm_int16, "tobytes") else bytes(pcm_int16)
+                cache_key = (voice_cfg.STT_RATE, pcm_bytes)
+            cached = (cache_key is not None and metrics_cache.get("key") == cache_key
+                      and metrics_cache.get("detector") is self._rt_noise_vad)
+            if cached:
+                metrics = metrics_cache["metrics"]
+            else:
+                metrics = self._rt_noise_vad.speech_metrics(pcm_int16, voice_cfg.STT_RATE)
+                self._rt_noise_vad.reset_state()
+            peak, mean, ratio, span_ratio, span_seconds = metrics
+            if (not cached and cache_key is not None
+                    and tuple(metrics) != (1, 1, 1, 1, 0)
+                    and all(math.isfinite(value) for value in metrics)
+                    and all(0 <= value <= 1 for value in metrics[:4])
+                    and span_seconds >= 0):
+                metrics_cache.clear()
+                metrics_cache.update(key=cache_key, detector=self._rt_noise_vad, metrics=tuple(metrics))
             if not fail_open and (peak, mean, ratio, span_ratio, span_seconds) == (1, 1, 1, 1, 0):
                 # The VAD's failure sentinel is not positive acoustic evidence.
                 return False
@@ -883,11 +900,11 @@ class VoiceService:
             logger.info(
                 "[realtime] noise-guard metrics: peak=%.3f mean=%.3f voiced_ratio=%.3f "
                 "span_ratio=%.3f span_seconds=%.2f voiced_ms=%.1f "
-                "min_ratio=%.2f min_voiced_ms=%.1f accepted=%s",
+                "min_ratio=%.2f min_voiced_ms=%.1f accepted=%s cached=%s",
                 peak, mean, ratio, span_ratio, span_seconds,
                 span_ratio * span_seconds * 1000,
                 hal_config.REALTIME_NOISE_SPEECH_RATIO,
-                hal_config.VOICE_NOISE_MIN_VOICED_MS, is_speech,
+                hal_config.VOICE_NOISE_MIN_VOICED_MS, is_speech, cached,
             )
             return is_speech
         except Exception as e:
@@ -2419,6 +2436,9 @@ class VoiceService:
         reply_stop=None,
     ):
         """Stream audio to STT provider until silence or TTS interrupts."""
+        # A capture owns at most one PCM/metrics entry. Never retain it on the
+        # service or carry evidence across a cancelled/next user turn.
+        noise_metrics_cache = {}
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
         if requires_manual_capture(harness_voice) and manual_capture is None:
             # A mode toggle can race the last normal VAD frame. Manual input
@@ -3194,7 +3214,7 @@ class VoiceService:
                             )):
                         early_audio_admitted = self._rt_noise_is_speech(
                             self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16),
-                            fail_open=False,
+                            fail_open=False, metrics_cache=noise_metrics_cache,
                         ) is True
                     last_final_snapshot = None
                     while self._running:
@@ -3215,7 +3235,8 @@ class VoiceService:
                                 and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT and audio_buffer):
                             try:
                                 early_speech = self._rt_noise_is_speech(
-                                    self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16)
+                                    self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16),
+                                    metrics_cache=noise_metrics_cache,
                                 )
                             except Exception as e:
                                 logger.warning("Early realtime speech check failed: %s", e)
@@ -3420,7 +3441,7 @@ class VoiceService:
                     pcm = self._np.frombuffer(
                         b"".join(audio_buffer), dtype=self._np.int16
                     )
-                    rt_audio_is_speech = self._rt_noise_is_speech(pcm)
+                    rt_audio_is_speech = self._rt_noise_is_speech(pcm, metrics_cache=noise_metrics_cache)
                     logger.info(
                         "[realtime] noise-guard ran: stt=%r, silero_speech=%s "
                         "(samples=%d, dur=%.2fs)",
