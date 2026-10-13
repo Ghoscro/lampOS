@@ -56,6 +56,12 @@ TURN_END_MAX_PAUSE_S = float(os.environ.get("HAL_TURN_END_MAX_PAUSE_S", "6.0"))
 TURN_END_MAX_DURATION_S = float(os.environ.get("HAL_TURN_END_MAX_DURATION_S", "180"))
 
 WARM_MIC = os.environ.get("HAL_WARM_MIC", "true").lower() == "true"
+# Experimental automatic ALSA capture isolation; manual and live paths are unchanged.
+CONTINUOUS_MIC_CAPTURE = os.environ.get("HAL_CONTINUOUS_MIC_CAPTURE", "false").lower() == "true"
+# Bound input retained while the consumer waits for a response or STT drain.
+CONTINUOUS_MIC_BACKLOG_S = max(1.024, min(10.0, float(
+    os.environ.get("HAL_CONTINUOUS_MIC_BACKLOG_S", "1.024")
+)))
 # Max echo-skip after TTS/music ends before resuming VAD (warm mic only).
 WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", "0.1"))
 
