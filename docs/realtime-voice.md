@@ -32,6 +32,13 @@ rebuild finishes during capture, buffered audio resumes immediately; if it is
 still running at the endpoint, the existing readiness wait is capped at two
 seconds before fallback. Cancellation never uploads a late completed take.
 
+Automatic non-LIVE endpoint noise checks use contiguous audio windows, including
+quiet frames. Intermittent loud frames are never concatenated across quiet gaps.
+A pending loud window must be classified before closing; accepted windows update
+the speech clock/trim index to their last above-RMS frame, not their quiet tail.
+All-quiet windows do not refresh the clock, including VAD failure fallback.
+Thresholds, manual/Harness capture and the separate LIVE idle detector are unchanged.
+
 ## Experimental independent microphone capture
 
 `HAL_CONTINUOUS_MIC_CAPTURE=true` opts automatic, non-LIVE ALSA capture into an

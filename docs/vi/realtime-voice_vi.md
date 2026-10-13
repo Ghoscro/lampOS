@@ -29,6 +29,13 @@ khác và STT preconnected giữ vòng đời hiện có. Gemini reconnect xong 
 thu thì gửi tiếp audio buffer ngay; nếu đến endpoint vẫn đang reconnect, chờ
 readiness tối đa hai giây rồi fallback. Lượt đã hủy không upload muộn.
 
+Kiểm tra noise để chốt lượt automatic non-LIVE dùng cửa sổ audio liên tục, gồm
+cả frame yên lặng; không ghép các frame lớn tiếng cách nhau bởi khoảng quiet.
+Window có frame lớn tiếng đang chờ phải được phân loại trước khi đóng lượt.
+Window được nhận là speech cập nhật clock/index trim theo frame vượt RMS cuối
+cùng, không theo đuôi quiet. Window toàn quiet không reset clock, kể cả khi VAD
+fail-open. Không đổi threshold, manual/Harness hoặc bộ đo idle LIVE riêng.
+
 ## Thử nghiệm luồng đọc microphone riêng
 
 `HAL_CONTINUOUS_MIC_CAPTURE=true` bật luồng đọc riêng sau AEC cho ALSA automatic,
