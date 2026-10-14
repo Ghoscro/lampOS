@@ -2,6 +2,7 @@
 
 import json
 import logging
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -27,10 +28,11 @@ from .utils import bbox_area, bbox_intersection, img2b64, xywh_to_xyxy
 
 logger = logging.getLogger(__name__)
 
-# How long to stop calling the detection API after a 429 (plan quota
-# exhausted). Every call inside the window is a guaranteed failure anyway;
-# safety is unchanged — the backend can't detect anything while limited.
-_RATE_LIMIT_BACKOFF_S = 300.0
+# Pause after a 429 (plan quota): BASE * 2**(n-1) for the n-th 429 in a row,
+# capped at MAX, with +-20 % jitter. A 5-minute blind window is too long for a
+# safety feature (#614 3.3); any non-429 reply resets the count.
+_RATE_LIMIT_BACKOFF_BASE_S = 5.0
+_RATE_LIMIT_BACKOFF_MAX_S = 60.0
 
 RESOURCES_DIR = Path(__file__).parent / "resources"
 
@@ -56,6 +58,7 @@ class RemoteFireHazardDetector:
         self._timeout: float = timeout
         self._crypto: CryptoSession | None = None
         self._backoff_until: float = 0.0
+        self._rate_limited_in_a_row: int = 0
 
         self._fire_classes: list[str] = self._load_classes(self.DEFAULT_FIRE_CLASSES_PATH)
         self._smoke_classes: list[str] = self._load_classes(self.DEFAULT_SMOKE_CLASSES_PATH)
@@ -85,12 +88,18 @@ class RemoteFireHazardDetector:
             return []
         return [line.strip() for line in path.read_text().strip().splitlines() if line.strip()]
 
-    def detect(self, frame: cv2t.MatLike) -> list[FireHazard]:
-        """Detect objects in a frame and assess fire hazard risk."""
+    def detect(self, frame: cv2t.MatLike) -> list[FireHazard] | None:
+        """Detect objects in a frame and assess fire hazard risk.
+
+        None means no observation (no URL, backoff, encryption unavailable,
+        network or HTTP error, bad reply); [] means the server looked and found nothing.
+        """
         if not self._url:
-            return []
+            return None
 
         objects = self._call_api(frame)
+        if objects is None:
+            return None
 
         objects = [
             o for o in objects
@@ -131,14 +140,14 @@ class RemoteFireHazardDetector:
         data = self._crypto.wrap_http_request(plain_body) if self._crypto is not None else plain_body
         return requests.post(self._url, data=data, headers=headers, timeout=self._timeout)
 
-    def _call_api(self, frame: cv2t.MatLike) -> list[dict[str, Any]]:
-        """POST frame to the object detection endpoint.
+    def _call_api(self, frame: cv2t.MatLike) -> list[dict[str, Any]] | None:
+        """POST frame to the object detection endpoint; None = no observation.
 
         Sends the server preset when one is configured. A server that rejects
         the preset (HTTP 400) gets the same frame again with the class list.
         """
         if time.time() < self._backoff_until:
-            return []
+            return None
         preset = config.FIRE_HAZARD_PRESET
         try:
             image_b64 = img2b64(frame)
@@ -152,18 +161,24 @@ class RemoteFireHazardDetector:
             else:
                 resp = self._post({"image_b64": image_b64, "classes": self._all_classes})
             if resp is None:
-                return []
+                return None
 
             if resp.status_code == 429:
-                self._backoff_until = time.time() + _RATE_LIMIT_BACKOFF_S
+                self._rate_limited_in_a_row += 1
+                delay = min(
+                    _RATE_LIMIT_BACKOFF_MAX_S,
+                    _RATE_LIMIT_BACKOFF_BASE_S * 2 ** (self._rate_limited_in_a_row - 1),
+                ) * random.uniform(0.8, 1.2)
+                self._backoff_until = time.time() + delay
                 logger.warning(
                     "[fire_hazard] HTTP 429 (quota) — pausing detection for %.0fs: %s",
-                    _RATE_LIMIT_BACKOFF_S, resp.text[:120],
+                    delay, resp.text[:120],
                 )
-                return []
+                return None
+            self._rate_limited_in_a_row = 0
             if resp.status_code != 200:
                 logger.warning("[fire_hazard] HTTP %d: %s", resp.status_code, resp.text[:200])
-                return []
+                return None
 
             if self._crypto is not None:
                 data = json.loads(self._crypto.unwrap_http_response(resp.content))
@@ -171,16 +186,19 @@ class RemoteFireHazardDetector:
                 data = resp.json()
 
             detections = data.get("detections", []) if isinstance(data, dict) else data
+            if not isinstance(detections, list):
+                logger.warning("[fire_hazard] unexpected reply: %.200r", data)
+                return None
             if used_preset:
                 self._check_preset_classes(detections)
             return detections
 
         except requests.RequestException as e:
             logger.warning("[fire_hazard] request failed: %s", e)
-            return []
+            return None
         except Exception as e:
             logger.exception("[fire_hazard] unexpected error: %s", e)
-            return []
+            return None
 
     def _check_preset_classes(self, detections: list[dict[str, Any]]) -> None:
         """Warn once if a preset reply names none of our prompts.
@@ -336,6 +354,10 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         logger.debug("[fire_hazard] OWLv2 check (%s)", reason)
 
         hazards = self._detector.detect(data)
+        if hazards is None:
+            # No observation: streaks and escalation stay as they were.
+            self._flush_buffer(now)
+            return
 
         with self._state_lock:
             if hazards:

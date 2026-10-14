@@ -271,3 +271,89 @@ def test_to_dict_and_cleanup_report_gate():
     assert d["gate_state"] == "ready" and d["escalated"] is True
     p.cleanup()
     assert gate.closed
+
+
+# --- error = no observation; 429 backoff (Task 4.1) ----------------------------
+
+import requests  # noqa: E402
+
+from hal.drivers.sensing.crypto import EncryptionUnavailable  # noqa: E402
+
+
+def test_timeout_returns_none(post):
+    post.responses = [requests.Timeout("slow")]
+    assert _detector().detect(FRAME) is None
+
+
+def test_connection_error_returns_none(post):
+    post.responses = [requests.ConnectionError("down")]
+    assert _detector().detect(FRAME) is None
+
+
+def test_http_500_returns_none(post):
+    post.responses = [_Resp(500, {"detail": "boom"})]
+    assert _detector().detect(FRAME) is None
+
+
+def test_bad_json_returns_none(post):
+    post.responses = [_Resp(200, "not-a-dict-or-list")]
+    assert _detector().detect(FRAME) is None
+
+
+def test_no_url_returns_none(post):
+    assert RemoteFireHazardDetector(base_url="", api_key="k").detect(FRAME) is None
+    assert post.bodies == []
+
+
+def test_encryption_unavailable_returns_none(post, monkeypatch):
+    def unavailable(self):
+        raise EncryptionUnavailable("no key")
+
+    monkeypatch.setattr(DLCrypto, "http_session", unavailable)
+    assert _detector().detect(FRAME) is None
+    assert post.bodies == []
+
+
+def test_ok_empty_returns_empty_list(post):
+    post.responses = [_Resp(200, {"detections": []})]
+    assert _detector().detect(FRAME) == []
+
+
+def test_429_backoff_is_short_and_jittered(post, monkeypatch):
+    now = [5000.0]
+    monkeypatch.setattr(fire_hazard.time, "time", lambda: now[0])
+    det = _detector()
+
+    def delay_after(resp) -> float:
+        post.responses = [resp]
+        det.detect(FRAME)
+        d = det._backoff_until - now[0]
+        now[0] = det._backoff_until + 0.001  # step past the window
+        return d
+
+    assert 4.0 <= delay_after(_Resp(429)) <= 6.0
+    assert 8.0 <= delay_after(_Resp(429)) <= 12.0
+    for _ in range(6):
+        assert delay_after(_Resp(429)) <= 72.0
+    assert delay_after(_Resp(429)) >= 48.0  # capped at 60 s, jittered ±20 %
+    delay_after(_Resp(200))
+    assert 4.0 <= delay_after(_Resp(429)) <= 6.0
+
+
+def test_inside_backoff_returns_none_without_posting(post, monkeypatch):
+    now = [5000.0]
+    monkeypatch.setattr(fire_hazard.time, "time", lambda: now[0])
+    det = _detector()
+    post.responses = [_Resp(429)]
+    assert det.detect(FRAME) is None
+    n = len(post.bodies)
+    now[0] += 1.0
+    assert det.detect(FRAME) is None
+    assert len(post.bodies) == n
+
+
+def test_failed_call_keeps_streak():
+    det = _FakeDetector(FIRE_HZ, None, FIRE_HZ)
+    p, clock, events = _perception(_FakeGate(GateVerdict.UNAVAILABLE), det)
+    _run_checks(p, clock, 3)  # fire at 0, failed call at 6, fire at 12
+    assert [t - T0 for t, _ in events.sent] == [12.0]
