@@ -2947,6 +2947,10 @@ class VoiceService:
             session_start = time.time()
             last_speech_idx = len(audio_buffer) - 1
             silence_probe: list = []
+            silence_probe_last_loud = None
+            contiguous_silence_probe = (
+                input_policy.automatic and not harness_listening and not voice_cfg.LIVE_MODE
+            )
             silence_vad_on = (
                 voice_cfg.SILENCE_VAD_ENABLED
                 and voice_cfg.SILENCE_VAD_WINDOW_FRAMES > 0
@@ -3083,23 +3087,28 @@ class VoiceService:
                 self._mic_level = energy
                 self._mic_level_ts = time.time()
                 endpoint_candidate = energy < voice_cfg.RMS_THRESHOLD
-                if energy >= voice_cfg.RMS_THRESHOLD:
-                    if not silence_vad_on:
-                        last_speech_time = time.time()
-                        last_speech_idx = len(audio_buffer) - 1
-                    else:
-                        silence_probe.append(data)
-                        if len(silence_probe) >= voice_cfg.SILENCE_VAD_WINDOW_FRAMES:
-                            window = self._np.concatenate(silence_probe)
-                            probe_frames = len(silence_probe)
-                            silence_probe = []
-                            if self._silence_window_is_speech(window, device_rate):
-                                last_speech_time = time.time()
-                                last_speech_idx = len(audio_buffer) - 1
+                if silence_vad_on and (contiguous_silence_probe or energy >= voice_cfg.RMS_THRESHOLD):
+                    # Feed contiguous audio, including quiet frames, to the
+                    # stateful VAD. Sparse bursts must not become fake speech.
+                    silence_probe.append(data)
+                    if energy >= voice_cfg.RMS_THRESHOLD:
+                        silence_probe_last_loud = (time.time(), len(audio_buffer) - 1)
+                    if len(silence_probe) >= voice_cfg.SILENCE_VAD_WINDOW_FRAMES:
+                        window = self._np.concatenate(silence_probe)
+                        probe_frames = len(silence_probe)
+                        window_is_speech = self._silence_window_is_speech(window, device_rate)
+                        if silence_probe_last_loud is not None:
+                            if window_is_speech:
+                                # Quiet tail frames cannot move the last-speech
+                                # clock/index, even when inference fails open.
+                                if contiguous_silence_probe:
+                                    last_speech_time, last_speech_idx = silence_probe_last_loud
+                                else:
+                                    # Explicit/live captures retain their existing
+                                    # loud-only window and finalization policy.
+                                    last_speech_time = time.time()
+                                    last_speech_idx = len(audio_buffer) - 1
                             else:
-                                # Loud background noise must not suppress the
-                                # endpoint clock. Only admit a completed Silero
-                                # rejection, never an unclassified loud window.
                                 endpoint_candidate = True
                                 noise_windows += 1
                                 if noise_windows in (1, 10, 50):
@@ -3108,6 +3117,15 @@ class VoiceService:
                                         "non-speech (%d frames each)",
                                         noise_windows, probe_frames,
                                     )
+                        silence_probe = []
+                        silence_probe_last_loud = None
+                    elif contiguous_silence_probe and silence_probe_last_loud is not None:
+                        # A quiet frame cannot close over pending loud input
+                        # until the complete contiguous window is classified.
+                        endpoint_candidate = False
+                elif energy >= voice_cfg.RMS_THRESHOLD:
+                    last_speech_time = time.time()
+                    last_speech_idx = len(audio_buffer) - 1
                 if endpoint_candidate and manual_capture is None and turn_should_close(time.time(), last_speech_time, final_ts[0]):
                     if turn_endpoint is not None:
                         end = len(audio_buffer)
