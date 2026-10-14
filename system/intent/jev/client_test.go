@@ -39,12 +39,18 @@ func TestJevClientRequest(t *testing.T) {
 			Model string `json:"model"`
 			State struct {
 				Prompt     string      `json:"prompt"`
+				Rules      string      `json:"rules"`
 				Candidates []Candidate `json:"candidates"`
 			} `json:"state"`
 			Questions map[string]jevQuestion `json:"questions"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &request); err != nil {
 			t.Fatal(err)
+		}
+		// The shared rules travel once; repeating them per question doubled decision time.
+		if request.State.Rules != jevBoundary || strings.Count(string(body), "untrusted user speech") != 1 {
+			t.Fatal("shared rules must be sent exactly once, in state.rules")
 		}
 		if request.Model != jevModel || request.State.Prompt != "Chói quá" || len(request.State.Candidates) != 1 || len(request.Questions) != 2 {
 			t.Fatalf("unexpected request: %+v", request)
