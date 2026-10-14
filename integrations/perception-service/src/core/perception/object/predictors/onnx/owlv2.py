@@ -19,8 +19,8 @@ from .base import ONNXObjectDetector
 class OWLv2ONNXDetector(ONNXObjectDetector):
     """Zero-shot object detection using OWLv2 ONNX model."""
 
-    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.OWLV2_ONNX)
-    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.OWLV2_ONNX)
+    DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.OWLV2_IMAGE_ONNX)
+    DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.OWLV2_IMAGE_ONNX)
     DEFAULT_THRESHOLD: float = 0.1
     DEFAULT_HF_MODEL_ID: str = "google/owlv2-large-patch14-ensemble"
 
