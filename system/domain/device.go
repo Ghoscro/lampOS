@@ -456,6 +456,15 @@ const (
 	// KindLEDRestingPreview shows a candidate colour without saving it via HAL POST /led/resting/preview.
 	KindLEDRestingPreview = "led.resting.preview"
 
+	// KindWakeSettingsGet reads the wake settings (phrases, chime, light, listening window).
+	KindWakeSettingsGet = "wakeword.settings.get"
+
+	// KindWakeSettingsSet saves any subset of the wake settings; omitted fields keep their value.
+	KindWakeSettingsSet = "wakeword.settings.set"
+
+	// KindWakeLightPreview plays a candidate wake light for a few seconds via HAL POST /led/wake-light/preview.
+	KindWakeLightPreview = "wakeword.light.preview"
+
 	// KindVolumeGet reads the speaker volume as a share of the device's allowed range.
 	KindVolumeGet = "volume.get"
 
@@ -976,6 +985,80 @@ type WakeWordGateData struct {
 	Enabled *bool `json:"enabled" validate:"required"`
 }
 
+// WakeSettings is the reply of wakeword.settings.get/set: the web Settings wake controls.
+type WakeSettings struct {
+	// Enabled is the "Require attention trigger" gate (config.json `wakeword`).
+	Enabled bool `json:"enabled"`
+	// VoiceInputMode gates the UI: the wake settings only apply in "automatic".
+	VoiceInputMode string `json:"voice_input_mode"`
+	AgentName      string `json:"agent_name"`
+	// Phrases is the list in effect; PhrasesCustom is false while it is the built-in list.
+	Phrases        []string `json:"phrases"`
+	PhrasesCustom  bool     `json:"phrases_custom"`
+	PhrasesDefault []string `json:"phrases_default"`
+	// NameAnywhere: each entry is a name heard anywhere in a sentence ("hey intern",
+	// "what time is it, intern"), not a phrase said at its start or end.
+	NameAnywhere   bool `json:"name_anywhere"`
+	MaxPhrases     int  `json:"max_phrases"`
+	MaxPhraseChars int  `json:"max_phrase_chars"`
+	Chime          bool `json:"chime"`
+	// HasLight is false on devices without an LED strip; Light is then ignored.
+	HasLight bool          `json:"has_light"`
+	Light    WakeLightLook `json:"light"`
+	// LightEffects lists the accepted Light.Effect values.
+	LightEffects  []string `json:"light_effects"`
+	LightSpeedMin float64  `json:"light_speed_min"`
+	LightSpeedMax float64  `json:"light_speed_max"`
+	// FollowupS is the listening window in effect; FollowupCustom is false while it is the image default.
+	FollowupS      int  `json:"followup_s"`
+	FollowupCustom bool `json:"followup_custom"`
+	FollowupMinS   int  `json:"followup_min_s"`
+	FollowupMaxS   int  `json:"followup_max_s"`
+	// Applying is true when the set reply was sent while HAL was still restarting for a gate change.
+	Applying bool `json:"applying,omitempty"`
+}
+
+// WakeLightLook is the wake light in effect: the owner's look over the board default.
+type WakeLightLook struct {
+	Enabled bool    `json:"enabled"`
+	Color   []int   `json:"color"`
+	Effect  string  `json:"effect"`
+	Speed   float64 `json:"speed"`
+}
+
+// WakeSettingsSetData is the wakeword.settings.set payload; nil fields keep their value.
+type WakeSettingsSetData struct {
+	Enabled *bool `json:"enabled,omitempty"`
+	// Phrases replaces the owner list; [] restores the built-in list.
+	Phrases   *[]string         `json:"phrases,omitempty"`
+	Chime     *bool             `json:"chime,omitempty"`
+	Light     *config.WakeLight `json:"light,omitempty"`
+	FollowupS *int              `json:"followup_s,omitempty"`
+}
+
+// Empty reports a payload that changes nothing.
+func (d WakeSettingsSetData) Empty() bool {
+	return d.Enabled == nil && d.Phrases == nil && d.Chime == nil && d.Light == nil && d.FollowupS == nil
+}
+
+// UpdateRequest maps the payload onto the shared PUT /api/device/config request.
+func (d WakeSettingsSetData) UpdateRequest() UpdateConfigRequest {
+	return UpdateConfigRequest{
+		WakeWord:      d.Enabled,
+		WakePhrases:   d.Phrases,
+		WakeChime:     d.Chime,
+		WakeLight:     d.Light,
+		WakeFollowupS: d.FollowupS,
+	}
+}
+
+// WakeLightPreviewData is the wakeword.light.preview payload (HAL POST /led/wake-light/preview).
+type WakeLightPreviewData struct {
+	Color  []int   `json:"color"`
+	Effect string  `json:"effect,omitempty"`
+	Speed  float64 `json:"speed,omitempty"`
+}
+
 // CloudPerceptionSetData lists the perceptions to change; omitted keys keep their value.
 type CloudPerceptionSetData struct {
 	Motion        *bool `json:"motion,omitempty"`
@@ -1230,6 +1313,8 @@ type ConfigPublicResponse struct {
 	WakePhrasesCustom bool `json:"wake_phrases_custom"`
 	// WakePhrasesDefault is the built-in list, for a "restore defaults" action.
 	WakePhrasesDefault []string `json:"wake_phrases_default"`
+	// WakeNameAnywhere: wake_phrases are names heard anywhere in a sentence (Intern).
+	WakeNameAnywhere bool `json:"wake_name_anywhere"`
 	// WakeChime is the effective wake chime toggle (default true).
 	WakeChime bool `json:"wake_chime"`
 	// WakeFollowupS is the owner's listening window after a wake, in seconds; nil when

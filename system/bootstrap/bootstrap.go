@@ -100,6 +100,7 @@ type Bootstrap struct {
 	// rollbackConfigPath overrides the on-device config location in isolated tests.
 	rollbackConfigPath string
 	pendingUpdatePath  string
+	serviceStateDir    string
 }
 
 // configRetryInterval is how often Serve reloads bootstrap.json while unprovisioned.
@@ -187,7 +188,7 @@ func (b *Bootstrap) Serve() error {
 	// force-update installs the published version now, ignoring min_version.
 	r.POST("/force-update/:target", func(c *gin.Context) {
 		target := c.Param("target")
-		if !forceTargetAllowed[target] {
+		if !b.serviceTargetAllowed(target) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
 			return
 		}
@@ -201,7 +202,7 @@ func (b *Bootstrap) Serve() error {
 	})
 	r.POST("/force-check/:target", func(c *gin.Context) {
 		target := c.Param("target")
-		if !forceTargetAllowed[target] {
+		if !b.serviceTargetAllowed(target) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
 			return
 		}
@@ -292,14 +293,17 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 
 	b.announcedThisCycle = false
 
-	changed := false
+	changed, activationErr := b.activatePromotedServices(ctx, meta)
+	if activationErr != nil {
+		slog.Error("service activation deferred", "component", "bootstrap", "error", activationErr)
+	}
 	var devicePrerequisiteErr error
 	// Agent-runtime CLIs are gated by componentInstalled; hermes also needs a commit pin.
-	for _, key := range []string{
+	for _, key := range append([]string{
 		domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy,
 		domain.OTAKeyOpenClaw, domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw,
 		domain.OTAKeyHermes,
-	} {
+	}, b.serviceKeys()...) {
 		component, ok := meta[key]
 		if !ok || !hermesPinned(key, component) {
 			continue
@@ -332,7 +336,7 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 			return fmt.Errorf("save state: %w", err)
 		}
 	}
-	return devicePrerequisiteErr
+	return errors.Join(devicePrerequisiteErr, activationErr)
 }
 
 // resolveSTTLanguage returns the configured stt_language code, or "".
@@ -367,7 +371,7 @@ func otaUpdateStartPhrase(lang string) string {
 // announceUpdateStart speaks the update cue once per cycle; errors are logged only.
 // Skipped on devices without the audio capability.
 func (b *Bootstrap) announceUpdateStart() {
-	if b.announcedThisCycle {
+	if !b.halOwned() || b.announcedThisCycle {
 		return
 	}
 	b.announcedThisCycle = true
@@ -383,14 +387,14 @@ func (b *Bootstrap) announceUpdateStart() {
 
 // progressLED shows an OTA status preset by name; skipped on bodies without light.
 func (b *Bootstrap) progressLED(state string) {
-	if device.Has(resolveDeviceType(), device.CapLight) {
+	if b.halOwned() && device.Has(resolveDeviceType(), device.CapLight) {
 		hal.SetStatus(state)
 	}
 }
 
 // restoreLED returns the strip to the user's LED state or the ambient resting look.
 func (b *Bootstrap) restoreLED() {
-	if device.Has(resolveDeviceType(), device.CapLight) {
+	if b.halOwned() && device.Has(resolveDeviceType(), device.CapLight) {
 		hal.RestoreLED()
 	}
 }
@@ -440,6 +444,9 @@ func (b *Bootstrap) fetchDeviceComponent(ctx context.Context, deviceType string)
 
 // reconcileDevice updates this device's profile via `software-update device`.
 func (b *Bootstrap) reconcileDevice(ctx context.Context) (bool, error) {
+	if !b.serviceTargetAllowed(domain.OTAKeyDevice) {
+		return false, nil
+	}
 	deviceType := resolveDeviceType()
 	if deviceType == "" {
 		slog.Warn("device_type unresolved — skipping device-profile OTA (set DEVICE_TYPE; refusing to assume lamp)", "component", "bootstrap")
@@ -459,6 +466,12 @@ func (b *Bootstrap) reconcileDevice(ctx context.Context) (bool, error) {
 // It only upgrades devices strictly below the floor (see floorVersion);
 // manual `software-update <key>` bypasses this and always installs Version.
 func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTAComponent) (bool, error) {
+	if !b.serviceTargetAllowed(key) {
+		return false, nil
+	}
+	if err := b.validateServiceTarget(key, target); err != nil {
+		return false, err
+	}
 	targetVersion := strings.TrimSpace(target.Version)
 	if targetVersion == "" {
 		return false, fmt.Errorf("metadata[%s].version is empty", key)
@@ -474,7 +487,7 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 	}
 
 	current := b.detectVersion(ctx, key)
-	if current == "" {
+	if current == "" && target.Service == "" {
 		current = b.state.Components[key]
 	}
 
@@ -569,6 +582,17 @@ func decodeOTAMetadataPayload(payload []byte, requireChecksums bool) (domain.OTA
 	if err := json.Unmarshal(payload, &meta); err != nil {
 		return nil, fmt.Errorf("decode verified metadata payload: %w", err)
 	}
+	for key, c := range meta {
+		if c.Service != "" || len(c.Replaces) > 0 || len(c.ActivateByDevice) > 0 {
+			if !requireChecksums {
+				delete(meta, key)
+				continue
+			}
+			if err := domain.ValidateOTAServiceComponent(key, c); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if requireChecksums {
 		if err := validateOTAMetadata(meta); err != nil {
 			return nil, err
@@ -579,6 +603,17 @@ func decodeOTAMetadataPayload(payload []byte, requireChecksums bool) (domain.OTA
 
 // detectVersion returns the current installed version for a component.
 func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
+	registry, err := b.serviceRegistry()
+	if err != nil || !registry.Allows(key) {
+		return ""
+	}
+	if c, ok := registry.Components[key]; ok {
+		data, err := os.ReadFile(filepath.Join(c.Release, "VERSION"))
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(data))
+	}
 	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
@@ -668,6 +703,16 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 // Coarser than detectVersion so a present-but-unreadable install can be repaired.
 // Keep in step with detectVersion and robots/<type>/software-update.
 func (b *Bootstrap) componentInstalled(key string) bool {
+	if !b.serviceTargetAllowed(key) {
+		return false
+	}
+	registry, err := b.serviceRegistry()
+	if err != nil {
+		return false
+	}
+	if _, ok := registry.Components[key]; ok {
+		return true
+	}
 	switch key {
 	case domain.OTAKeyBootstrap:
 		// Always, otherwise the worker could never self-update.
@@ -764,6 +809,22 @@ func dirExists(path string) bool {
 
 // applyUpdate runs the appropriate update command for the given component.
 func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domain.OTAComponent) error {
+	if !b.serviceTargetAllowed(key) {
+		return fmt.Errorf("component %q not owned by installed services", key)
+	}
+	registry, err := b.serviceRegistry()
+	if err != nil {
+		return err
+	}
+	if _, ok := registry.Components[key]; ok {
+		runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		out, err := system.Run(runCtx, "software-update", key)
+		if err != nil {
+			return fmt.Errorf("software-update %s: %w: %s", key, err, out)
+		}
+		return nil
+	}
 	switch key {
 	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw, domain.OTAKeyDevice,
 		domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw, domain.OTAKeyHermes:

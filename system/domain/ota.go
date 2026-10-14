@@ -3,12 +3,16 @@ package domain
 // OTAComponent describes version and download URL for a single component.
 // Auto-update triggers only below MinVersion (empty = Version); manual software-update always installs Version.
 type OTAComponent struct {
-	Version    string `json:"version"`
-	MinVersion string `json:"min_version,omitempty"`
+	Service    string   `json:"service,omitempty"`
+	Replaces   []string `json:"replaces,omitempty"`
+	Version    string   `json:"version"`
+	MinVersion string   `json:"min_version,omitempty"`
 	// MinVersionByDevice overrides MinVersion per device_type; types not listed fall back to MinVersion.
 	MinVersionByDevice map[string]string `json:"min_version_by_device,omitempty"`
-	URL                string            `json:"url"`
-	SHA256             string            `json:"sha256,omitempty"`
+	// ActivateByDevice authorizes first installation of a service for an exact device type.
+	ActivateByDevice map[string]bool `json:"activate_by_device,omitempty"`
+	URL              string          `json:"url"`
+	SHA256           string          `json:"sha256,omitempty"`
 	// Commit pins a git-installed component (hermes) to an upstream commit; empty = unpinned (HEAD).
 	Commit string `json:"commit,omitempty"`
 }
