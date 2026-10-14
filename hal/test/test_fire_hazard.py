@@ -186,12 +186,20 @@ def _perception(gate, detector, clock=None):
     return p, clock, events
 
 
+def _check(p, frame=FRAME):
+    """One check on the caller's thread, then wait for its OWLv2 round (if any)."""
+    p._check_impl(frame)
+    fut = p._owlv2_future
+    if fut is not None:
+        fut.result(timeout=5)
+
+
 def _run_checks(p, clock, n, frame=FRAME):
     """n due checks, STEP seconds apart, starting at the clock's current time."""
     for i in range(n):
         if i:
             clock.t += STEP
-        p._check_impl(frame)
+        _check(p, frame)
 
 
 def test_gate_miss_skips_owlv2():
@@ -206,7 +214,7 @@ def test_gate_hit_calls_owlv2_same_frame():
     gate, det = _FakeGate(GateVerdict.HIT), _FakeDetector([])
     p, clock, _ = _perception(gate, det)
     frame = np.ones((32, 32, 3), dtype=np.uint8)
-    p._check_impl(frame)
+    _check(p, frame)
     assert det.frames == [frame] and det.frames[0] is frame
 
 
@@ -266,7 +274,7 @@ def test_timeline_alert_latency_matches_today():
 def test_to_dict_and_cleanup_report_gate():
     gate = _FakeGate(GateVerdict.HIT)
     p, clock, _ = _perception(gate, _FakeDetector([]))
-    p._check_impl(FRAME)
+    _check(p, FRAME)
     d = p.to_dict()
     assert d["gate_state"] == "ready" and d["escalated"] is True
     p.cleanup()
@@ -431,13 +439,13 @@ def test_absent_observation_breaks_streak():
 
 def test_stale_streak_restarts_after_gap():
     p, clock, events = _always_owlv2(FIRE_HZ)
-    p._check_impl(FRAME)  # t=0
+    _check(p, FRAME)  # t=0
     for t in (40.0, 46.0):
         clock.t = T0 + t
-        p._check_impl(FRAME)
+        _check(p, FRAME)
     assert events.sent == []
     clock.t = T0 + 52.0
-    p._check_impl(FRAME)
+    _check(p, FRAME)
     assert [t - T0 for t, _ in events.sent] == [52.0]
 
 
@@ -483,7 +491,7 @@ def test_safe_fire_dedup_30min():
     assert [t - T0 for t, _ in events.sent] == [12.0]
     for _ in range(3):
         clock.t += STEP
-        p._check_impl(FRAME)
+        _check(p, FRAME)
     assert len(events.sent) == 2 and events.sent[1][0] - events.sent[0][0] >= 1800
 
 
@@ -502,3 +510,117 @@ def test_dedup_window_per_type():
     assert p._dedup_window(FireHazardEnum.SAFE_FIRE.value) == config.FIRE_HAZARD_DEDUP_WINDOW_S
     for t in (FireHazardEnum.HAZARD_FIRE, FireHazardEnum.UNSURE_FIRE, FireHazardEnum.SMOKE):
         assert p._dedup_window(t.value) == config.FIRE_HAZARD_REALERT_S
+
+
+# --- OWLv2 off the shared camera pool (Task 4.4) ---------------------------------
+
+import threading  # noqa: E402
+
+from hal.drivers.sensing.perceptions.processors.base import Perception  # noqa: E402
+
+
+class _BlockingDetector:
+    def __init__(self, result=None):
+        self.result = result if result is not None else []
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def detect(self, frame):
+        self.calls += 1
+        self.entered.set()
+        self.release.wait(5)
+        return self.result
+
+
+class _BarrierPerception(Perception):
+    def __init__(self, barrier):
+        super().__init__(None, lambda *a: None)
+        self.barrier = barrier
+        self.ran = threading.Event()
+
+    def _check_impl(self, data):
+        self.barrier.wait(timeout=0.5)
+        self.ran.set()
+
+    def cleanup(self):
+        pass
+
+
+def test_slow_owlv2_does_not_hold_shared_pool():
+    det = _BlockingDetector()
+    p, clock, _ = _perception(_FakeGate(GateVerdict.UNAVAILABLE), det)
+    try:
+        p.check(FRAME)  # real shared-pool path
+        assert det.entered.wait(2), "OWLv2 call never started"
+        # Both pool workers must be free: two checks that only finish together.
+        barrier = threading.Barrier(2)
+        a, b = _BarrierPerception(barrier), _BarrierPerception(barrier)
+        a.check(FRAME)
+        b.check(FRAME)
+        assert a.ran.wait(1) and b.ran.wait(1)
+        assert not barrier.broken
+        assert det.calls == 1 and not det.release.is_set()
+    finally:
+        det.release.set()
+
+
+def test_one_request_in_flight_max():
+    det = _BlockingDetector()
+    p, clock, _ = _perception(_FakeGate(GateVerdict.UNAVAILABLE), det)
+    try:
+        p._check_impl(FRAME)
+        assert det.entered.wait(2)
+        for _ in range(3):
+            clock.t += STEP
+            p._check_impl(FRAME)
+        assert det.calls == 1
+    finally:
+        det.release.set()
+    p._owlv2_future.result(timeout=5)
+    clock.t += STEP
+    _check(p)
+    assert det.calls == 2
+
+
+def test_retire_before_post_sends_nothing():
+    det = _FakeDetector(FIRE_HZ)
+    p, clock, events = _perception(_FakeGate(GateVerdict.UNAVAILABLE), det)
+    p.retire()
+    p._owlv2_round(FRAME, clock.t)
+    assert det.frames == []
+    assert events.sent == []
+
+
+def test_retire_during_post_drops_event():
+    det = _BlockingDetector(FIRE_HZ)
+    p, clock, events = _perception(_FakeGate(GateVerdict.UNAVAILABLE), det)
+    # A flame streak that this observation will confirm.
+    p._streaks["flame"] = (clock.t - 12.0, clock.t - 6.0)
+    p._check_impl(FRAME)
+    assert det.entered.wait(2)
+    p.retire()
+    det.release.set()
+    p._owlv2_future.result(timeout=5)
+    assert events.sent == []
+
+
+def test_retire_cleans_up_gate_and_worker():
+    gate = _FakeGate(GateVerdict.UNAVAILABLE)
+    p, clock, _ = _perception(gate, _FakeDetector([]))
+    p.retire()
+    assert gate.closed
+    clock.t += STEP
+    p._check_impl(FRAME)  # a late call after shutdown must not raise or post
+    assert p.to_dict()["owlv2_inflight"] is False
+
+
+def test_results_applied_in_order():
+    p, clock, _ = _always_owlv2(FIRE_HZ)
+    seen = []
+    for _ in range(5):
+        _check(p)
+        seen.append(p._streaks["flame"][1])
+        clock.t += STEP
+    assert seen == sorted(seen) and len(set(seen)) == 5
+    assert p._streaks["flame"][0] == T0

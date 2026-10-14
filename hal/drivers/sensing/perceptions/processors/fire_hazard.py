@@ -6,6 +6,7 @@ import random
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, override
 
@@ -314,6 +315,10 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
     the gate. The window closes FIRE_HAZARD_ESCALATION_HOLD_S after the last
     OWLv2 fire/smoke sighting. While the gate model is unavailable, OWLv2 runs
     every check (the behavior before the gate).
+
+    The gate runs on the shared camera pool; the OWLv2 HTTP call runs on this
+    instance's own single worker, at most one in flight, so a slow upload never
+    holds a camera pool thread.
     """
 
     def __init__(
@@ -328,6 +333,7 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         clock: Callable[[], float] = time.time,
     ):
         super().__init__(perception_state, send_event)
+        # Deliberately unused: fire checks must run with nobody home. Do not turn this into a presence gate (#614).
         self._presense_service = presense_service
         self._detector = detector if detector is not None else RemoteFireHazardDetector(base_url=base_url, api_key=api_key)
         self._gate = gate if gate is not None else FireGate()
@@ -352,6 +358,12 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         self._flush_interval: float = config.FIRE_HAZARD_FLUSH_S
         self._last_flush_ts: float = 0.0
 
+        self._owlv2_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="fire-owlv2",
+        )
+        self._owlv2_inflight: bool = False  # guarded by _state_lock
+        self._owlv2_future: Future[None] | None = None
+
     @override
     def _check_impl(self, data: cv2t.MatLike) -> None:
         if data is None:
@@ -369,25 +381,55 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         if not call:
             self._flush_buffer(now)
             return
-        logger.debug("[fire_hazard] OWLv2 check (%s)", reason)
-
-        hazards = self._detector.detect(data)
-        if hazards is None:
-            # No observation: streaks and escalation stay as they were.
-            self._flush_buffer(now)
-            return
 
         with self._state_lock:
-            if hazards:
-                self._escalated_until = now + config.FIRE_HAZARD_ESCALATION_HOLD_S
-            confirmed_kinds = self._update_streaks(now, hazards)
-            confirmed = [h for h in hazards if _kind(h) in confirmed_kinds]
-            if confirmed:
-                annotated = self._annotate_frame(data, confirmed)
-                self._hazard_buffer.extend(confirmed)
-                self._snapshot_buffer.append(annotated)
-
+            if self._owlv2_inflight:
+                # At most one request in flight: keeps results in order and bounds uploads.
+                logger.debug("[fire_hazard] OWLv2 still in flight, skipping check (%s)", reason)
+                submit = False
+            else:
+                self._owlv2_inflight = True
+                submit = True
+        if submit:
+            logger.debug("[fire_hazard] OWLv2 check (%s)", reason)
+            try:
+                self._owlv2_future = self._owlv2_executor.submit(self._owlv2_round, data, now)
+                # The round flushes after applying its result. Flushing here as well
+                # could send the older buffer first and push a newly confirmed type
+                # back by a whole FIRE_HAZARD_FLUSH_S.
+                return
+            except RuntimeError:
+                # Executor already shut down by cleanup().
+                with self._state_lock:
+                    self._owlv2_inflight = False
         self._flush_buffer(now)
+
+    def _owlv2_round(self, frame: cv2t.MatLike, ts: float) -> None:
+        """One OWLv2 call and its effects; runs on the dedicated worker."""
+        try:
+            with self._lock:
+                if self._retired:
+                    return
+            hazards = self._detector.detect(frame)
+            if hazards is not None:
+                # None = no observation: streaks and escalation stay as they were.
+                with self._state_lock:
+                    if hazards:
+                        self._escalated_until = max(
+                            self._escalated_until, ts + config.FIRE_HAZARD_ESCALATION_HOLD_S,
+                        )
+                    confirmed_kinds = self._update_streaks(ts, hazards)
+                    confirmed = [h for h in hazards if _kind(h) in confirmed_kinds]
+                    if confirmed:
+                        annotated = self._annotate_frame(frame, confirmed)
+                        self._hazard_buffer.extend(confirmed)
+                        self._snapshot_buffer.append(annotated)
+            self._flush_buffer(self._clock())
+        except Exception:
+            logger.exception("[fire_hazard] OWLv2 round failed")
+        finally:
+            with self._state_lock:
+                self._owlv2_inflight = False
 
     def _update_streaks(self, now: float, hazards: list[FireHazard]) -> set[str]:
         """Apply one real OWLv2 observation to the flame/smoke streaks.
@@ -480,6 +522,12 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         if not new_types:
             return
 
+        with self._lock:
+            retired = self._retired
+        if retired:
+            logger.debug("[fire_hazard] retired, dropping alert: %s", new_types)
+            return
+
         types_summary = ", ".join(sorted(new_types))
         message = f"Fire hazard detected: {types_summary}"
         logger.info("[fire_hazard] %s (%d snapshots)", message, len(snapshots))
@@ -518,8 +566,12 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
                 "dedup_keys": len(self._last_sent_by_type),
                 "gate_state": self._gate.state,
                 "escalated": self._clock() < self._escalated_until,
+                "owlv2_inflight": self._owlv2_inflight,
             }
 
     @override
     def cleanup(self) -> None:
+        # An in-flight POST finishes on its own (bounded by FIRE_HAZARD_API_TIMEOUT_S);
+        # the retired checks in _owlv2_round/_flush_buffer drop its result.
+        self._owlv2_executor.shutdown(wait=False, cancel_futures=True)
         self._gate.close()
