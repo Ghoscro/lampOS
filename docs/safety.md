@@ -487,9 +487,30 @@ Six conditions are enforced today; setup-incomplete is reserved.
       own envelope instead of `off_playback` (lamp-a0ae's heavier elbow idles at
       54-60 % against the 52 % taken from lamp-52e6). On
       lamp-52e6 the gaze cut most recordings short within a second whenever someone
-      sat in front of it, so this is where a hand usually meets the arm. Re-learn after recalibrating the arm or changing `torque_limit`.
+      sat in front of it, so this is where a hand usually meets the arm. Re-learn after recalibrating the arm.
+      **Passive learning** (`PassiveLearner` in `hal/drivers/motors/contact_profile.py`)
+      keeps the envelope current without a learn run: every play of a recording
+      (`music_*` included) is sampled like a learn run, and counts only when it ran from
+      its first frame to its last with no contact stop, cut-off, direct move or learn
+      run in it. The last 5 clean runs per recording stay in RAM, and each clean run
+      with all 5 updates that recording's envelope with their second highest value per
+      frame, so one run a hand brushed does not count. A recording with no envelope
+      gets one only 30 min after its first clean run, from the per-frame max (the
+      loosest), so a few minutes of cold servos do not set it. Updates move slowly both
+      ways: a frame rises at most 3 % load / 1° lag, so a push that stays under the
+      floor cannot walk it up quickly, and falls a quarter of the gap, so a few cool
+      runs do not make it touchy. A run that trips never counts, so a contact pause
+      nobody holds through (it ends without a torque release) is taken as a false
+      stop instead: the envelope within ±3 frames of it rises one step toward the
+      sample that stopped it, at most 3 times a day per recording, and does not fall
+      for 24 h after. Updates are saved at most every 10 min. The envelope is saved with the `torque_limit`
+      it was learned under (`contact_profile.json.signature`); after a `torque_limit`
+      change it is dropped at startup and the fixed floors apply until it is learned
+      again (an envelope learned at 60 % tripped lamp-c0a4's idle `base_pitch` about
+      300 times in 25 min at 70 %).
       `GET /health.servo_overload.contact.profile` shows `margin`, how many recordings
-      are learned and which one a learn run is on.
+      are learned, which one a learn run is on and `passive_runs` (clean runs held per
+      recording).
       **Limits:** nothing is seen before the touch, and a light object the arm can
       simply push, such as a cup or a photo frame, may never load a joint enough to trip.
 - [x] **Servo torque cap → a softer arm.** An optional `torque_limit` map

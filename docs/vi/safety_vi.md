@@ -465,9 +465,31 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       chính nó thay cho `off_playback` (elbow nặng hơn của lamp-a0ae khi idle lên 54-60 %
       so với sàn 52 % lấy từ lamp-52e6). Trên lamp-52e6, gaze cắt ngang phần lớn recording chỉ trong một giây mỗi
       khi có người ngồi trước đèn, nên đây là chỗ tay người thường gặp tay đèn. Học lại
-      sau khi hiệu chuẩn lại tay đèn hoặc đổi `torque_limit`.
-      `GET /health.servo_overload.contact.profile` hiện `margin`, số recording đã học và
-      recording mà lượt học đang chạy.
+      sau khi hiệu chuẩn lại tay đèn.
+      **Học ngầm** (`PassiveLearner` trong `hal/drivers/motors/contact_profile.py`) giữ
+      envelope luôn mới mà không cần lượt học: mỗi lần phát một recording (kể cả
+      `music_*`) được lấy mẫu như lượt học, và chỉ được tính khi chạy từ frame đầu tới
+      frame cuối mà không có contact stop, cut-off, di chuyển trực tiếp hay lượt học nào
+      xen vào. 5 lần chạy sạch gần nhất của mỗi recording được giữ trong RAM, và mỗi lần
+      chạy sạch khi đã đủ 5 lần cập nhật envelope của recording đó bằng giá trị lớn thứ
+      hai từng frame, nên một lần bị tay chạm nhẹ không được tính. Recording chưa có
+      envelope chỉ được tạo envelope sau 30 phút kể từ lần chạy sạch đầu tiên, lấy giá
+      trị tối đa từng frame (lỏng nhất), để vài phút servo còn nguội không quyết định nó.
+      Cập nhật đi chậm cả hai chiều: mỗi frame tăng tối đa 3 % tải / 1° lag, nên một cú
+      đẩy luôn nằm dưới sàn không kéo nó lên nhanh được, và giảm một phần tư khoảng
+      chênh, nên vài lần chạy lúc servo mát không làm đèn quá nhạy. Lần chạy nào bị trip
+      không bao giờ được tính, nên một lần dừng do va chạm mà không ai giữ qua hết thời
+      gian pause (kết thúc mà không nhả torque) được coi là dừng nhầm: envelope trong ±3
+      frame quanh đó tăng một bước về phía mẫu đã làm dừng, tối đa 3 lần mỗi ngày cho
+      mỗi recording, và không giảm trong 24 giờ sau đó. Cập nhật được lưu tối đa 10 phút
+      một lần. Envelope được lưu
+      kèm `torque_limit` lúc học (`contact_profile.json.signature`); đổi `torque_limit`
+      thì khi khởi động envelope bị bỏ và dùng các sàn cố định cho tới khi học lại
+      (envelope học ở 60 % làm idle của lamp-c0a4 trip `base_pitch` khoảng 300 lần trong
+      25 phút ở 70 %).
+      `GET /health.servo_overload.contact.profile` hiện `margin`, số recording đã học,
+      recording mà lượt học đang chạy và `passive_runs` (số lần chạy sạch đang giữ của
+      mỗi recording).
       **Giới hạn:** không thấy gì trước khi chạm, và một vật
       nhẹ mà tay đèn đẩy đi được, như cái cốc hay khung ảnh, có thể không bao giờ làm khớp nào đủ tải để
       trip.

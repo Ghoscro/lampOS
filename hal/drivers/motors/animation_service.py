@@ -6,7 +6,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Set
 from hal.follower import LeLampFollowerConfig, LeLampFollower
 from hal.presets import EMO_SLEEPY, SERVO_CMD_PLAY, SERVO_CMD_MUSIC_START, SERVO_CMD_MUSIC_STOP, SERVO_IDLE, SERVO_MUSIC_GROOVE
-from hal.drivers.motors.contact_profile import LAG_PREFIX, ContactProfile
+from hal.drivers.motors.contact_profile import LAG_PREFIX, ContactProfile, PassiveLearner
 from hal.drivers.motors.overload import OverloadGuard, load_magnitude
 from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
 
@@ -201,6 +201,10 @@ class AnimationService:
         # joint's contact floor is that envelope plus the profile margin. None keeps
         # the fixed floors everywhere.
         self._contact_profile = contact_profile
+        # Keeps that envelope up to date from the recordings the lamp plays anyway.
+        self._passive = PassiveLearner(contact_profile) if contact_profile is not None else None
+        # (recording, frame, channel, sample) of the last contact stop during playback.
+        self._contact_stop_at: Optional[tuple] = None
         self._learning: Optional[Set[str]] = None
         self._learn_current: Optional[str] = None
         self._learn_thread: Optional[threading.Thread] = None
@@ -1153,6 +1157,7 @@ class AnimationService:
                 "margin": self._contact_profile.margin,
                 "recordings": len(self._contact_profile.recordings()),
                 "learning": self._learn_current,
+                "passive_runs": self._passive.runs() if self._passive is not None else {},
             },
         }
 
@@ -1223,6 +1228,7 @@ class AnimationService:
             joint, value / 10.0, unit, self._contact_release_s, self._overload.retry_s,
         )
         self._contact_hold = None
+        self._contact_stop_at = None
         self._contact.clear()
         self._overload.trip(joint, value)
         self._overload_cut(joint, value, logged=True)
@@ -1230,6 +1236,8 @@ class AnimationService:
     def _overload_cut(self, joint: str, load: int, logged: bool = False) -> None:
         """Stop motion and cut torque on every servo. No park move: the arm is blocked."""
         guard = self._overload
+        if self._passive is not None:
+            self._passive.discard()
         if not logged:
             logger.warning(
                 "[overload] %s load %.1f%% >= %.1f%% for %.1fs — cutting torque, retry in %.0fs",
@@ -1294,15 +1302,21 @@ class AnimationService:
         """
         if not loads:
             return loads, None
-        off = self._contact_off_playback
-        if off and (
+        passive = self._passive
+        moving_direct = (
             self._direct_move
             or self._contact_now() - self._direct_move_ended < OFF_PLAYBACK_SETTLE_S
-        ):
+        )
+        if passive is not None and moving_direct:
+            passive.discard()
+        off = self._contact_off_playback
+        if off and moving_direct:
             return loads, None
         profile = self._contact_profile
         position = self._playback_position()
         learning = self._learning
+        if passive is not None and (position is None or learning is not None):
+            passive.end()
         if profile is not None and position is not None:
             samples = dict(loads)
             lags = self._read_lags()
@@ -1312,6 +1326,8 @@ class AnimationService:
                 if position[0] in learning:
                     profile.learn(position[0], position[1], samples)
                 return loads, None
+            if passive is not None:
+                passive.observe(position[0], position[1], len(self._current_actions), samples)
             # This unit's envelope wins over off_playback, settled idle included: the
             # fixed floors came from lamp-52e6, and lamp-a0ae's heavier elbow idles at
             # 54-60 % against their 52 %.
@@ -1375,6 +1391,8 @@ class AnimationService:
         profile = self._contact_profile
         for rec in recordings:
             profile.forget(rec)
+            if self._passive is not None:
+                self._passive.forget(rec)
         self._learning = set(recordings)
         logger.info("[contact] learn run: %d recordings x %d", len(recordings), runs)
         try:
@@ -1431,7 +1449,13 @@ class AnimationService:
 
     def _contact_stop(self, joint: str, load: int) -> None:
         """Stop where the arm is and keep it there (torque ON) for the pause."""
+        # Where it stopped, read before the halt ends playback: a pause nobody holds
+        # through loosens the envelope there (_contact_recover).
+        position = self._playback_position() if self._learning is None else None
+        self._contact_stop_at = (*position, joint, load) if position is not None else None
         self._halt.set()
+        if self._passive is not None:
+            self._passive.discard()
         # Pin the pose and block goal writes under one lock hold, so no playback or
         # tracker frame lands in between and drives back into the obstacle.
         with self.bus_lock:
@@ -1493,9 +1517,13 @@ class AnimationService:
             held = " (%s peaked %.1f while held, release at %.1f; lag peaked %.1f deg)" % (
                 joint, hold.peak[joint] / 10.0, self._contact_hold_floors[joint] / 10.0,
                 hold.peak.get(LAG_PREFIX + motor, 0) / 10.0)
+        stop_at, self._contact_stop_at = self._contact_stop_at, None
         if self.overload_active:
             # The cut-off took over meanwhile; its own recovery unblocks the goals.
             return
+        if stop_at is not None and self._passive is not None:
+            # Nobody held it through the pause: most likely a false stop.
+            self._passive.loosen(*stop_at)
         with self.bus_lock:
             if self.robot:
                 self.robot.goal_writes_blocked = False

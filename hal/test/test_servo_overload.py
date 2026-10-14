@@ -1099,3 +1099,82 @@ def test_settled_idle_uses_this_units_envelope_over_off_playback(profile_rig):
     profile_rig.profile.forget("idle")
     ticks()
     assert svc.contact_active, "not learned: the off_playback floor still watches"
+
+
+# --- Passive learning wired into the monitor --------------------------------------
+
+
+@pytest.fixture
+def passive_rig(profile_rig):
+    from hal.drivers.motors.contact_profile import PassiveLearner
+    profile_rig.svc._passive = PassiveLearner(profile_rig.profile)
+    profile_rig.svc._current_actions = [{}] * 8
+    profile_rig.svc._current_frame_index = 0
+    return profile_rig
+
+
+def _play_through(rig, frames=8):
+    for frame in range(frames):
+        rig.svc._current_frame_index = frame
+        rig.svc._overload_tick()
+        rig.clock.advance(0.05)
+    rig.svc._current_frame_index = frames   # finished: no recording owns its frames
+    rig.svc._overload_tick()
+
+
+def test_a_free_run_feeds_the_passive_learner(passive_rig):
+    _play_through(passive_rig)
+    assert passive_rig.svc._passive.runs() == {"stretching": 1}
+    assert passive_rig.svc.overload_status()["contact"]["profile"]["passive_runs"] == {"stretching": 1}
+
+
+def test_a_run_with_a_contact_stop_is_not_learned(passive_rig):
+    svc = passive_rig.svc
+    svc._current_frame_index = 2
+    svc._overload_tick()
+    passive_rig.bus.loads = _stalled("base_yaw", 1000)
+    for _ in range(4):
+        svc._overload_tick()
+        passive_rig.clock.advance(0.05)
+    assert svc.contact_active
+    svc._current_frame_index = 8
+    svc._overload_tick()
+    assert svc._passive.runs() == {}
+
+
+def test_a_run_during_a_learn_run_is_left_to_the_learn_run(passive_rig):
+    passive_rig.svc._learning = {"stretching"}
+    _play_through(passive_rig)
+    assert passive_rig.svc._passive.runs() == {}
+
+
+def _stop_on_envelope(rig):
+    """A learned base_pitch envelope of 30 % (floor 45 %) stops the arm at 50 %."""
+    for frame in range(8):
+        rig.profile.learn("stretching", frame, {**IDLE, "base_pitch": 300})
+    rig.svc._current_frame_index = 4
+    rig.bus.loads = {**IDLE, "base_pitch": 500}
+    for _ in range(4):
+        rig.svc._overload_tick()
+        rig.clock.advance(0.05)
+    assert rig.svc.contact_active
+
+
+def test_a_stop_nobody_holds_through_loosens_the_envelope_there(passive_rig):
+    _stop_on_envelope(passive_rig)
+    passive_rig.bus.loads = dict(IDLE)
+    passive_rig.clock.advance(3.0)
+    passive_rig.svc._overload_tick()
+    assert not passive_rig.svc.contact_active
+    assert passive_rig.profile.envelope("stretching")["base_pitch"][4] == 330
+
+
+def test_a_stop_held_into_a_torque_release_leaves_the_envelope(passive_rig):
+    passive_rig.svc._contact_release_s = 0.5
+    _stop_on_envelope(passive_rig)
+    for _ in range(12):
+        passive_rig.svc._overload_tick()
+        passive_rig.clock.advance(0.05)
+    assert passive_rig.svc.overload_active
+    passive_rig.svc._contact_recover()
+    assert passive_rig.profile.envelope("stretching")["base_pitch"][4] == 300
