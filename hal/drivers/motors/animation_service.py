@@ -1374,17 +1374,27 @@ class AnimationService:
     def _wait_recording_done(self, rec: str, timeout: float = 90.0) -> bool:
         """Block until `rec` started and then ended (or settled, for idle).
 
-        True when it reached its last frame, False when something cut it short.
+        True when it reached its last frame, False when something cut it short. A
+        recording that holds its final pose (sleepy) never ends, so it is done once it
+        has played through to that pose.
         """
         deadline = time.monotonic() + timeout
         started = False
+        # Seen mid-playback: a held final pose left over from before this play
+        # (frame index already at the end) does not count as played through.
+        played = False
         reached = 0
         while time.monotonic() < deadline and self._running.is_set():
             current = self._current_recording
             if current == rec and not self._idle_settled:
                 started = True
-                reached = max(reached, self._current_frame_index)
+                frame = self._current_frame_index
                 total = len(self._current_actions)
+                reached = max(reached, frame)
+                if frame < total:
+                    played = True
+                elif played and rec in self._no_idle_recordings:
+                    return True
             elif started:
                 return reached >= total - 1
             time.sleep(0.05)

@@ -874,6 +874,54 @@ def test_learning_needs_a_profile(contact_rig):
         contact_rig.svc.learn_contact_profile(["nod"])
 
 
+def _wait_with(svc, frames, timeout=90.0):
+    """Run _wait_recording_done while each poll steps the playback to the next frame index.
+
+    `frames` is the frame index seen at each poll; past its end the state stays put.
+    Returns (result, polls).
+    """
+    svc._current_actions = [{}] * 10
+    svc._idle_settled = False
+    clock = [0.0]
+    polls = [0]
+
+    def sleep(dt):
+        clock[0] += dt
+        polls[0] += 1
+        if polls[0] < len(frames):
+            svc._current_frame_index = frames[polls[0]]
+
+    svc._current_frame_index = frames[0]
+    fake_time = types.SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep)
+    with mock.patch("hal.drivers.motors.animation_service.time", fake_time):
+        return svc._wait_recording_done(svc._current_recording, timeout), polls[0]
+
+
+def test_a_recording_holding_its_final_pose_is_done_once_played_through(contact_rig):
+    # sleepy never falls back to idle: a learn run used to wait out the 90 s timeout,
+    # three attempts per run, then log "never played through".
+    svc = contact_rig.svc
+    svc._current_recording = "sleepy"
+    done, polls = _wait_with(svc, [0, 3, 6, 9, 10])
+    assert done is True
+    assert polls == 4
+
+
+def test_a_held_final_pose_left_from_before_the_play_is_not_played_through(contact_rig):
+    svc = contact_rig.svc
+    svc._current_recording = "sleepy"
+    done, _ = _wait_with(svc, [10], timeout=2.0)
+    assert done is False
+
+
+def test_a_stale_held_pose_then_a_fresh_play_waits_for_the_fresh_one(contact_rig):
+    svc = contact_rig.svc
+    svc._current_recording = "sleepy"
+    done, polls = _wait_with(svc, [10, 10, 0, 5, 10])
+    assert done is True
+    assert polls == 4
+
+
 def test_a_joint_trailing_its_learned_lag_stops_even_at_the_torque_cap(profile_rig):
     profile_rig.profile.lag_margin = 40
     # Learned: base_pitch at the 70 % cap here already, 3 deg behind its goal.
