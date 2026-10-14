@@ -39,6 +39,13 @@ the speech clock/trim index to their last above-RMS frame, not their quiet tail.
 All-quiet windows do not refresh the clock, including VAD failure fallback.
 Thresholds, manual/Harness capture and the separate LIVE idle detector are unchanged.
 
+Post-capture Silero checks reuse one valid metrics result within the same capture
+only when PCM bytes, sample rate and detector identity match exactly. Changed or
+trimmed audio is analyzed again. Admission thresholds and fail-open/fail-closed
+policy are reapplied on every call; unavailable, failed and sentinel results are
+not cached. This removes repeated inference on identical audio, not the first
+speech check, and does not change endpoint thresholds.
+
 ## Experimental independent microphone capture
 
 `HAL_CONTINUOUS_MIC_CAPTURE=true` opts automatic, non-LIVE ALSA capture into an

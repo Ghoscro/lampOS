@@ -36,6 +36,13 @@ Window được nhận là speech cập nhật clock/index trim theo frame vư�
 cùng, không theo đuôi quiet. Window toàn quiet không reset clock, kể cả khi VAD
 fail-open. Không đổi threshold, manual/Harness hoặc bộ đo idle LIVE riêng.
 
+Kiểm tra Silero sau capture tái sử dụng tối đa một kết quả metrics hợp lệ trong
+chính lượt đó, chỉ khi byte PCM, sample rate và detector giống hệt. Audio đã đổi
+hoặc trim vẫn chạy lại. Mỗi lần gọi vẫn xét ngưỡng và chính sách fail-open/
+fail-closed; không cache kết quả unavailable, lỗi hay sentinel. Thay đổi chỉ bỏ
+inference lặp trên cùng audio, không bỏ lần kiểm tra speech đầu và không đổi
+ngưỡng chốt câu.
+
 ## Thử nghiệm luồng đọc microphone riêng
 
 `HAL_CONTINUOUS_MIC_CAPTURE=true` bật luồng đọc riêng sau AEC cho ALSA automatic,
