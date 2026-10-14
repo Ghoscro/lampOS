@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, override
 
@@ -20,6 +21,7 @@ from hal.drivers.sensing.perceptions.utils import PerceptionStateObservers
 from hal.drivers.sensing.presence_service import PresenseService
 
 from .base import Perception
+from .fire_gate import FireGate, GateVerdict
 from .models import FireHazard, FireHazardEnum
 from .utils import bbox_area, bbox_intersection, img2b64, xywh_to_xyxy
 
@@ -273,7 +275,14 @@ class RemoteFireHazardDetector:
 
 
 class FireHazardPerception(Perception[cv2t.MatLike]):
-    """Detects fire hazards by calling the object detection API on each frame."""
+    """Detects fire hazards: an on-lamp gate picks the frames OWLv2 checks.
+
+    Each due check runs the local gate. A gate hit calls OWLv2 on the same frame
+    and opens an escalation window, during which OWLv2 runs every check without
+    the gate. The window closes FIRE_HAZARD_ESCALATION_HOLD_S after the last
+    OWLv2 fire/smoke sighting. While the gate model is unavailable, OWLv2 runs
+    every check (the behavior before the gate).
+    """
 
     def __init__(
         self,
@@ -282,11 +291,18 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         presense_service: PresenseService | None = None,
         base_url: str = config.FIRE_HAZARD_BACKEND_URL,
         api_key: str = config.DL_API_KEY,
+        gate: FireGate | None = None,
+        detector: RemoteFireHazardDetector | None = None,
+        clock: Callable[[], float] = time.time,
     ):
         super().__init__(perception_state, send_event)
         self._presense_service = presense_service
-        self._detector = RemoteFireHazardDetector(base_url=base_url, api_key=api_key)
+        self._detector = detector if detector is not None else RemoteFireHazardDetector(base_url=base_url, api_key=api_key)
+        self._gate = gate if gate is not None else FireGate()
+        self._clock: Callable[[], float] = clock
         self._last_check_ts: float = 0.0
+        # OWLv2 runs every check while now < this (see class docstring).
+        self._escalated_until: float = 0.0
 
         self._state_lock: threading.RLock = threading.RLock()
         self._last_sent_by_type: dict[str, float] = {}
@@ -306,16 +322,24 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
             logger.debug("[fire_hazard] frame is None, skipping")
             return
 
-        now = time.time()
+        now = self._clock()
 
         if now - self._last_check_ts < config.FIRE_HAZARD_CHECK_INTERVAL_S:
             self._flush_buffer(now)
             return
         self._last_check_ts = now
 
+        call, reason = self._need_owlv2(now, data)
+        if not call:
+            self._flush_buffer(now)
+            return
+        logger.debug("[fire_hazard] OWLv2 check (%s)", reason)
+
         hazards = self._detector.detect(data)
 
         with self._state_lock:
+            if hazards:
+                self._escalated_until = now + config.FIRE_HAZARD_ESCALATION_HOLD_S
             seen_types: set[str] = set()
             confirmed: list[FireHazard] = []
 
@@ -342,6 +366,26 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
                 self._snapshot_buffer.append(annotated)
 
         self._flush_buffer(now)
+
+    def _need_owlv2(self, now: float, frame: cv2t.MatLike) -> tuple[bool, str]:
+        """Whether this check calls OWLv2, and why.
+
+        Reasons: "escalated" (gate skipped), "gate_hit" (opens escalation; OWLv2
+        runs on this same frame), "gate_unavailable" (fail-open) and "gate_miss"
+        (no call; a miss is not an OWLv2 observation, so streaks are untouched).
+        """
+        with self._state_lock:
+            if now < self._escalated_until:
+                return True, "escalated"
+        result = self._gate.run(frame)
+        if result.verdict is GateVerdict.HIT:
+            with self._state_lock:
+                self._escalated_until = now + config.FIRE_HAZARD_ESCALATION_HOLD_S
+            logger.info("[fire_hazard] gate hit: %s %.2f — escalating to OWLv2", result.label, result.score)
+            return True, "gate_hit"
+        if result.verdict is GateVerdict.UNAVAILABLE:
+            return True, "gate_unavailable"
+        return False, "gate_miss"
 
     def _flush_buffer(self, now: float) -> None:
         with self._state_lock:
@@ -418,8 +462,10 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
                 "buffered_snapshots": len(self._snapshot_buffer),
                 "confirmed_types": list(self._first_seen_by_type.keys()),
                 "dedup_keys": len(self._last_sent_by_type),
+                "gate_state": self._gate.state,
+                "escalated": self._clock() < self._escalated_until,
             }
 
     @override
     def cleanup(self) -> None:
-        pass
+        self._gate.close()

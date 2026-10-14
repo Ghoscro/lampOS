@@ -114,3 +114,160 @@ def test_known_classes_do_not_warn(post, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         _detector().detect(FRAME)
     assert not [r for r in caplog.records if "no known classes" in r.getMessage()]
+
+
+# --- gate + escalation (Task 3.3) ----------------------------------------------
+
+from hal.drivers.sensing.perceptions.processors.fire_gate import GateResult, GateVerdict  # noqa: E402
+from hal.drivers.sensing.perceptions.processors.fire_hazard import FireHazardPerception  # noqa: E402
+from hal.drivers.sensing.perceptions.processors.models import FireHazard, FireHazardEnum  # noqa: E402
+
+T0 = 1000.0
+STEP = 6.0  # effective check cadence: 2 s sensing tick + 5 s interval gate (D6)
+
+
+def _hz(kind: FireHazardEnum) -> FireHazard:
+    return FireHazard(type=kind, bbox=np.array([10, 10, 30, 30], dtype=np.float32))
+
+
+FIRE_HZ = [_hz(FireHazardEnum.UNSURE_FIRE)]
+
+
+class _Clock:
+    def __init__(self, t: float = T0):
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+class _FakeGate:
+    def __init__(self, *verdicts: GateVerdict):
+        self.verdicts = list(verdicts) or [GateVerdict.MISS]
+        self.runs: list[object] = []
+        self.closed = False
+
+    @property
+    def state(self) -> str:
+        return "ready"
+
+    def run(self, frame) -> GateResult:
+        self.runs.append(frame)
+        v = self.verdicts.pop(0) if len(self.verdicts) > 1 else self.verdicts[0]
+        return GateResult(v, 0.5 if v is GateVerdict.HIT else 0.0, "fire" if v is GateVerdict.HIT else None, 1.0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeDetector:
+    def __init__(self, *results):
+        self.results = list(results) or [[]]
+        self.frames: list[object] = []
+
+    def detect(self, frame):
+        self.frames.append(frame)
+        return self.results.pop(0) if len(self.results) > 1 else self.results[0]
+
+
+class _Events:
+    def __init__(self, clock: _Clock):
+        self.clock = clock
+        self.sent: list[tuple[float, str]] = []
+
+    def __call__(self, event, message, kind, snapshots, extra):
+        self.sent.append((self.clock.t, message))
+
+
+def _perception(gate, detector, clock=None):
+    clock = clock or _Clock()
+    events = _Events(clock)
+    p = FireHazardPerception(None, events, gate=gate, detector=detector, clock=clock)
+    return p, clock, events
+
+
+def _run_checks(p, clock, n, frame=FRAME):
+    """n due checks, STEP seconds apart, starting at the clock's current time."""
+    for i in range(n):
+        if i:
+            clock.t += STEP
+        p._check_impl(frame)
+
+
+def test_gate_miss_skips_owlv2():
+    gate, det = _FakeGate(GateVerdict.MISS), _FakeDetector()
+    p, clock, _ = _perception(gate, det)
+    _run_checks(p, clock, 5)
+    assert det.frames == []
+    assert len(gate.runs) == 5
+
+
+def test_gate_hit_calls_owlv2_same_frame():
+    gate, det = _FakeGate(GateVerdict.HIT), _FakeDetector([])
+    p, clock, _ = _perception(gate, det)
+    frame = np.ones((32, 32, 3), dtype=np.uint8)
+    p._check_impl(frame)
+    assert det.frames == [frame] and det.frames[0] is frame
+
+
+def test_escalation_holds_while_owlv2_sees_fire():
+    gate, det = _FakeGate(GateVerdict.HIT, GateVerdict.MISS), _FakeDetector(FIRE_HZ)
+    p, clock, _ = _perception(gate, det)
+    _run_checks(p, clock, 5)
+    assert len(det.frames) == 5
+    assert len(gate.runs) == 1
+
+
+def test_escalation_ends_10s_after_last_sighting():
+    # Fire seen at t=0 only: escalated until t=10, so t=6 still calls OWLv2 and
+    # t=12 is back to the gate (MISS, no OWLv2 call).
+    gate = _FakeGate(GateVerdict.HIT, GateVerdict.MISS)
+    det = _FakeDetector(FIRE_HZ, [], [])
+    p, clock, _ = _perception(gate, det)
+    _run_checks(p, clock, 4)  # t = 0, 6, 12, 18
+    assert len(det.frames) == 2
+    assert len(gate.runs) == 3
+
+
+def test_escalation_ends_10s_after_start_without_sighting():
+    gate = _FakeGate(GateVerdict.HIT, GateVerdict.MISS)
+    det = _FakeDetector([])
+    p, clock, _ = _perception(gate, det)
+    _run_checks(p, clock, 3)  # t = 0 (hit), 6 (escalated), 12 (gate miss)
+    assert len(det.frames) == 2
+    assert len(gate.runs) == 2
+
+
+def test_gate_unavailable_is_fail_open():
+    gate, det = _FakeGate(GateVerdict.UNAVAILABLE), _FakeDetector([])
+    p, clock, _ = _perception(gate, det)
+    _run_checks(p, clock, 5)
+    assert len(det.frames) == 5
+
+
+def test_need_owlv2_reasons():
+    p, clock, _ = _perception(_FakeGate(GateVerdict.MISS, GateVerdict.UNAVAILABLE, GateVerdict.HIT), _FakeDetector())
+    assert p._need_owlv2(T0, FRAME) == (False, "gate_miss")
+    assert p._need_owlv2(T0, FRAME) == (True, "gate_unavailable")
+    assert p._need_owlv2(T0, FRAME) == (True, "gate_hit")
+    assert p._need_owlv2(T0 + 9.9, FRAME) == (True, "escalated")
+
+
+def test_timeline_alert_latency_matches_today():
+    sent_at = {}
+    for verdict in (GateVerdict.HIT, GateVerdict.UNAVAILABLE):
+        p, clock, events = _perception(_FakeGate(verdict, GateVerdict.MISS), _FakeDetector(FIRE_HZ))
+        _run_checks(p, clock, 3)  # fire at 0 / 6 / 12
+        assert len(events.sent) == 1
+        sent_at[verdict] = events.sent[0][0] - T0
+    assert sent_at[GateVerdict.HIT] == sent_at[GateVerdict.UNAVAILABLE] == 12.0
+
+
+def test_to_dict_and_cleanup_report_gate():
+    gate = _FakeGate(GateVerdict.HIT)
+    p, clock, _ = _perception(gate, _FakeDetector([]))
+    p._check_impl(FRAME)
+    d = p.to_dict()
+    assert d["gate_state"] == "ready" and d["escalated"] is True
+    p.cleanup()
+    assert gate.closed
