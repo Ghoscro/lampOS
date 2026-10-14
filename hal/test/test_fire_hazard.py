@@ -357,3 +357,95 @@ def test_failed_call_keeps_streak():
     p, clock, events = _perception(_FakeGate(GateVerdict.UNAVAILABLE), det)
     _run_checks(p, clock, 3)  # fire at 0, failed call at 6, fire at 12
     assert [t - T0 for t, _ in events.sent] == [12.0]
+
+
+# --- flame/smoke streaks; classify at confirm time (Task 4.2) -------------------
+
+def _obj(xywh) -> dict:
+    return {"xywh": list(xywh)}
+
+
+_BOX = (0.5, 0.5, 0.2, 0.2)
+
+
+def _assess(fire=(), smoke=(), flammable=(), safe=()):
+    det = _detector()
+    hz = det._assess_hazard([_obj(b) for b in fire], [_obj(b) for b in smoke],
+                            [_obj(b) for b in flammable], [_obj(b) for b in safe])
+    return sorted(h.type.value for h in hz)
+
+
+def test_assess_fire_without_context_is_unsure():
+    assert _assess(fire=[_BOX]) == ["unsure_fire"]
+
+
+def test_assess_fire_on_flammable_is_hazard():
+    assert _assess(fire=[_BOX], flammable=[(0.5, 0.6, 0.4, 0.4)]) == ["hazard_fire"]
+
+
+def test_assess_fire_more_on_safe_is_safe():
+    assert _assess(fire=[_BOX], flammable=[(0.65, 0.5, 0.2, 0.2)], safe=[_BOX]) == ["safe_fire"]
+
+
+def test_assess_equal_overlap_is_hazard():
+    assert _assess(fire=[_BOX], flammable=[_BOX], safe=[_BOX]) == ["hazard_fire"]
+
+
+def test_assess_smoke_only():
+    assert _assess(smoke=[_BOX]) == ["smoke"]
+
+
+def test_assess_zero_area_fire_dropped():
+    assert _assess(fire=[(0.5, 0.5, 0.0, 0.0)]) == []
+
+
+def test_assess_fire_and_smoke():
+    assert _assess(fire=[_BOX], smoke=[_BOX]) == ["smoke", "unsure_fire"]
+
+
+def _always_owlv2(*results):
+    return _perception(_FakeGate(GateVerdict.UNAVAILABLE), _FakeDetector(*results))
+
+
+def test_label_flip_does_not_reset_streak():
+    p, clock, events = _always_owlv2(
+        [_hz(FireHazardEnum.HAZARD_FIRE)], [_hz(FireHazardEnum.UNSURE_FIRE)], [_hz(FireHazardEnum.HAZARD_FIRE)],
+    )
+    _run_checks(p, clock, 3)
+    assert [(t - T0, m) for t, m in events.sent] == [(12.0, "Fire hazard detected: hazard_fire")]
+
+
+def test_confirm_type_comes_from_confirming_frame():
+    p, clock, events = _always_owlv2(
+        [_hz(FireHazardEnum.UNSURE_FIRE)], [_hz(FireHazardEnum.UNSURE_FIRE)], [_hz(FireHazardEnum.SAFE_FIRE)],
+    )
+    _run_checks(p, clock, 3)
+    assert [m for _, m in events.sent] == ["Fire hazard detected: safe_fire"]
+
+
+def test_absent_observation_breaks_streak():
+    p, clock, events = _always_owlv2(FIRE_HZ, [], FIRE_HZ)
+    _run_checks(p, clock, 3)
+    assert events.sent == []
+
+
+def test_stale_streak_restarts_after_gap():
+    p, clock, events = _always_owlv2(FIRE_HZ)
+    p._check_impl(FRAME)  # t=0
+    for t in (40.0, 46.0):
+        clock.t = T0 + t
+        p._check_impl(FRAME)
+    assert events.sent == []
+    clock.t = T0 + 52.0
+    p._check_impl(FRAME)
+    assert [t - T0 for t, _ in events.sent] == [52.0]
+
+
+def test_smoke_and_flame_streaks_independent():
+    p, _, _ = _always_owlv2()
+    smoke, fire = _hz(FireHazardEnum.SMOKE), _hz(FireHazardEnum.UNSURE_FIRE)
+    assert p._update_streaks(T0, [smoke]) == set()
+    assert p._update_streaks(T0 + 6, [smoke, fire]) == set()
+    assert p._update_streaks(T0 + 12, [smoke, fire]) == {"smoke"}
+    assert p._update_streaks(T0 + 18, [fire]) == {"flame"}
+    assert p.to_dict()["streak_kinds"] == ["flame"]

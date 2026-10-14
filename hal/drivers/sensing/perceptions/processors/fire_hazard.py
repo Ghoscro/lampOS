@@ -34,6 +34,20 @@ logger = logging.getLogger(__name__)
 _RATE_LIMIT_BACKOFF_BASE_S = 5.0
 _RATE_LIMIT_BACKOFF_MAX_S = 60.0
 
+# A flame/smoke streak whose last positive sighting is older than this is
+# dropped, so a sighting minutes after a failed call cannot confirm instantly.
+_STREAK_MAX_GAP_S = 30.0
+
+_FLAME_TYPES: frozenset[FireHazardEnum] = frozenset(
+    {FireHazardEnum.SAFE_FIRE, FireHazardEnum.HAZARD_FIRE, FireHazardEnum.UNSURE_FIRE}
+)
+
+
+def _kind(h: FireHazard) -> str:
+    """Streak kind: "flame" for any fire label, "smoke" for smoke."""
+    return "flame" if h.type in _FLAME_TYPES else "smoke"
+
+
 RESOURCES_DIR = Path(__file__).parent / "resources"
 
 # Set once the "preset reply names none of our classes" warning has been logged.
@@ -326,7 +340,9 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         self._last_sent_by_type: dict[str, float] = {}
         self._dedup_window_s: float = config.FIRE_HAZARD_DEDUP_WINDOW_S
 
-        self._first_seen_by_type: dict[str, float] = {}
+        # "flame" / "smoke" -> (first_seen, last_seen). A flame streak survives a
+        # safe/hazard/unsure label flip; the type is taken from the confirming frame.
+        self._streaks: dict[str, tuple[float, float]] = {}
         self._confirm_s: float = config.FIRE_HAZARD_CONFIRM_S
 
         self._hazard_buffer: list[FireHazard] = []
@@ -362,32 +378,39 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         with self._state_lock:
             if hazards:
                 self._escalated_until = now + config.FIRE_HAZARD_ESCALATION_HOLD_S
-            seen_types: set[str] = set()
-            confirmed: list[FireHazard] = []
-
-            for h in hazards:
-                t = h.type.value
-                seen_types.add(t)
-
-                if t not in self._first_seen_by_type:
-                    self._first_seen_by_type[t] = now
-                    logger.debug("[fire_hazard] first seen: %s", t)
-
-                elapsed = now - self._first_seen_by_type[t]
-                if elapsed >= self._confirm_s:
-                    confirmed.append(h)
-
-            for t in list(self._first_seen_by_type):
-                if t not in seen_types:
-                    logger.debug("[fire_hazard] streak broken: %s", t)
-                    del self._first_seen_by_type[t]
-
+            confirmed_kinds = self._update_streaks(now, hazards)
+            confirmed = [h for h in hazards if _kind(h) in confirmed_kinds]
             if confirmed:
                 annotated = self._annotate_frame(data, confirmed)
                 self._hazard_buffer.extend(confirmed)
                 self._snapshot_buffer.append(annotated)
 
         self._flush_buffer(now)
+
+    def _update_streaks(self, now: float, hazards: list[FireHazard]) -> set[str]:
+        """Apply one real OWLv2 observation to the flame/smoke streaks.
+
+        Returns the kinds that are confirmed (present and seen for at least
+        FIRE_HAZARD_CONFIRM_S). A kind absent from this observation is dropped.
+        """
+        with self._state_lock:
+            present = {_kind(h) for h in hazards}
+            confirmed: set[str] = set()
+            for kind in list(self._streaks):
+                if kind not in present:
+                    logger.debug("[fire_hazard] streak broken: %s", kind)
+                    del self._streaks[kind]
+            for kind in present:
+                streak = self._streaks.get(kind)
+                if streak is None or now - streak[1] > _STREAK_MAX_GAP_S:
+                    logger.debug("[fire_hazard] first seen: %s", kind)
+                    first_seen = now
+                else:
+                    first_seen = streak[0]
+                self._streaks[kind] = (first_seen, now)
+                if now - first_seen >= self._confirm_s:
+                    confirmed.add(kind)
+            return confirmed
 
     def _need_owlv2(self, now: float, frame: cv2t.MatLike) -> tuple[bool, str]:
         """Whether this check calls OWLv2, and why.
@@ -482,7 +505,7 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
                 "type": "fire_hazard",
                 "buffered_hazards": len(self._hazard_buffer),
                 "buffered_snapshots": len(self._snapshot_buffer),
-                "confirmed_types": list(self._first_seen_by_type.keys()),
+                "streak_kinds": list(self._streaks.keys()),
                 "dedup_keys": len(self._last_sent_by_type),
                 "gate_state": self._gate.state,
                 "escalated": self._clock() < self._escalated_until,
