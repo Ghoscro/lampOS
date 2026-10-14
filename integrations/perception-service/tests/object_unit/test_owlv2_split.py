@@ -1,4 +1,7 @@
-"""OWLv2 text/image split must match the old single graph (tiny random model, no download)."""
+"""OWLv2 text/image split: export wrappers vs the old single graph (tiny random model) and the
+two-session detector with in-memory presets (fake sessions). No download."""
+
+from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
@@ -13,6 +16,8 @@ from core.export.entries.export_owlv2 import (
     _export_text,
 )
 from core.export.utils.nms import xyxy_to_xywh_normalized
+from core.perception.object.predictors.onnx import owlv2 as owlv2_mod
+from core.perception.object.predictors.onnx.owlv2 import OWLv2ONNXDetector
 
 BOS, EOS = 49406, 49407
 
@@ -111,3 +116,156 @@ def test_onnx_export_roundtrip(tiny, tmp_path):
     np.testing.assert_allclose(probs, ref2[1].numpy(), atol=1e-4)
     assert probs.shape[-1] == 2
     assert ref[1].shape[-1] == 3
+
+
+# ---------------------------------------------------------------------------
+# OWLv2ONNXDetector: two sessions + in-memory presets (fake sessions, no model)
+# ---------------------------------------------------------------------------
+
+_D = 8
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_HAL_RESOURCES = _REPO_ROOT / "hal/drivers/sensing/perceptions/processors/resources"
+
+
+class _FakeTokenizer:
+    def __call__(self, text, images=None, return_tensors="np"):
+        tokens = np.zeros((len(text), 16), dtype=np.int64)
+        tokens[:, 0] = BOS
+        return {"input_ids": tokens}
+
+
+class _FakeTextSession:
+    def __init__(self):
+        self.calls: list[int] = []
+
+    def run(self, _outputs, inputs):
+        q = inputs["class_tokens"].shape[0]
+        self.calls.append(q)
+        # Distinct rows: row i is a scaled one-hot, so the image fake can tell queries apart.
+        embeds = np.zeros((q, _D), dtype=np.float32)
+        for i in range(q):
+            embeds[i, i % _D] = 1.0 + i
+        return [embeds]
+
+
+class _FakeImageSession:
+    def __init__(self):
+        self.query_embeds: list[np.ndarray] = []
+
+    def run(self, _outputs, inputs):
+        b = inputs["images"].shape[0]
+        q = inputs["query_embeds"].shape[0]
+        self.query_embeds.append(inputs["query_embeds"])
+        boxes = np.tile(np.array([[[0.5, 0.5, 0.2, 0.2]]], dtype=np.float32), (b, 1, 1))
+        probs = np.zeros((b, 1, q), dtype=np.float32)
+        probs[:, 0, 0] = 0.9
+        labels = np.zeros((b, 1), dtype=np.int64)
+        return [boxes, probs, labels]
+
+
+@pytest.fixture
+def fakes(monkeypatch, tmp_path):
+    text, image = _FakeTextSession(), _FakeImageSession()
+    state = {"image_inputs": ["images", "query_embeds"], "profiles": {}}
+    text_path, image_path = tmp_path / "owlv2_text_v1.onnx", tmp_path / "owlv2_image_v1.onnx"
+
+    def fake_prepare(model_path, *, warmup_inputs=None, trt_profile=None):
+        session = text if model_path == text_path else image
+        state["profiles"][model_path] = trt_profile
+        for inputs in warmup_inputs or []:
+            session.run(None, inputs)
+        return session
+
+    def fake_inputs(path):
+        if path == text_path:
+            return {"class_tokens": ["num_classes", 16]}
+        return {name: ["batch", 3, 1008, 1008] if name == "images" else ["num_classes", _D]
+                for name in state["image_inputs"]}
+
+    monkeypatch.setattr(owlv2_mod, "prepare_ort_session", fake_prepare)
+    monkeypatch.setattr(owlv2_mod, "ensure_downloaded", lambda path, remote=None: path)
+    monkeypatch.setattr(owlv2_mod, "read_onnx_inputs", fake_inputs)
+    monkeypatch.setattr(owlv2_mod.Owlv2Processor, "from_pretrained", lambda _id: _FakeTokenizer())
+
+    detector = OWLv2ONNXDetector(model_path=image_path, text_model_path=text_path)
+    return detector, text, image, state
+
+
+def _img() -> np.ndarray:
+    return np.zeros((120, 160, 3), dtype=np.uint8)
+
+
+def _preset_lines() -> list[str]:
+    return (OWLv2ONNXDetector.PRESETS_DIR / "fire_hazard_v1.txt").read_text().split("\n")[:-1]
+
+
+def test_presets_encoded_once_at_start(fakes):
+    detector, text, image, state = fakes
+    detector.start()
+    # Warmup Q=46 and Q=1, then one encode of fire_hazard_v1 (Q=46).
+    assert text.calls == [46, 1, 46]
+    assert detector.preset_names == frozenset({"fire_hazard_v1"})
+    assert detector.is_ready()
+    # The image graph was warmed with the stored preset embeddings and with Q=1.
+    assert [q.shape for q in image.query_embeds] == [(46, _D), (1, _D)]
+    profiles = list(state["profiles"].values())
+    assert profiles[0] == {"class_tokens": ("1x16", "46x16", "500x16")}
+    assert profiles[1] == {
+        "images": ("1x3x1008x1008", "1x3x1008x1008", "1x3x1008x1008"),
+        "query_embeds": (f"1x{_D}", f"46x{_D}", f"500x{_D}"),
+    }
+
+
+def test_preset_request_skips_text_graph(fakes):
+    detector, text, image, _ = fakes
+    detector.start()
+    n_text = len(text.calls)
+    stored = detector._preset_embeds["fire_hazard_v1"][1]
+    out = detector.predict([_img()], preset="fire_hazard_v1")
+    assert len(text.calls) == n_text
+    assert image.query_embeds[-1] is stored
+    assert image.query_embeds[-1].shape == (46, _D)
+    assert out[0].class_names == ["a single flame"]
+
+
+def test_preset_wins_over_classes(fakes):
+    detector, text, _, _ = fakes
+    detector.start()
+    n_text = len(text.calls)
+    out = detector.predict([_img()], classes=["cat"], preset="fire_hazard_v1")
+    assert out[0].class_names == ["a single flame"]
+    assert len(text.calls) == n_text
+
+
+def test_classes_request_uses_text_then_image(fakes):
+    detector, text, image, _ = fakes
+    detector.start()
+    n_text = len(text.calls)
+    out = detector.predict([_img()], classes=["cat", "dog"])
+    assert text.calls[n_text:] == [2]
+    assert image.query_embeds[-1].shape == (2, _D)
+    assert out[0].class_names == ["cat"]
+
+
+def test_unknown_preset_raises_value_error(fakes):
+    detector, _, _, _ = fakes
+    detector.start()
+    with pytest.raises(ValueError, match="Unknown preset"):
+        detector.predict([_img()], preset="nope")
+
+
+def test_preset_file_matches_hal_prompts():
+    hal = b"".join(
+        (_HAL_RESOURCES / f"{name}_classes.txt").read_bytes() for name in ("fire", "smoke", "flammable", "safe")
+    )
+    preset = (OWLv2ONNXDetector.PRESETS_DIR / "fire_hazard_v1.txt").read_bytes()
+    assert preset == hal
+    assert len(_preset_lines()) == 46
+
+
+def test_old_single_graph_rejected(fakes):
+    detector, _, _, state = fakes
+    state["image_inputs"] = ["images", "class_tokens"]
+    with pytest.raises(RuntimeError, match="old single graph"):
+        detector.start()
+    assert not detector.is_ready()
