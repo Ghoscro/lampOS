@@ -5,8 +5,12 @@ The selected language is config.json `stt_language`; an empty value (the web's
 session only when the selected language holds at least `min_prob` of AmberNet's
 full 107-language softmax over its first `speech_s` of speech, or over all of it
 when the utterance ends sooner. A capture with less than `min_speech_s` of speech
-cannot be judged reliably; `short_policy` decides it (default reject). If the
-model cannot run, the gate fails open.
+cannot be judged reliably; `short_policy` decides it (default reject).
+
+The gate is active only once its model is loaded: a local `HAL_LANG_ID_MODEL_PATH`
+file, else the release asset pinned in `ambernet.model.json`, downloaded in the
+background (see model_store.py). Until then, or after the model fails to load,
+captures pass without a hold (fail open).
 """
 
 import logging
@@ -44,10 +48,15 @@ def resolve_language(selected: Optional[str]) -> Optional[str]:
 
 
 class LanguageGate:
-    def __init__(self, identifier: LanguageIdentifier, *, mode: str, min_prob: float,
+    def __init__(self, identifier: Optional[LanguageIdentifier], *, mode: str, min_prob: float,
                  speech_s: float, max_wait_s: float, speech_rms: float, utterance_gap_s: float,
                  short_policy: str = "reject", min_speech_s: float | None = None):
         self.identifier = identifier
+        # Set by attach() once the model is loaded; a gate built with an identifier
+        # (tests) is ready at once.
+        self._ready = threading.Event()
+        if identifier is not None:
+            self._ready.set()
         self.mode = mode if mode in MODES else MODE_ENFORCE
         self.min_prob = min_prob
         self.speech_s = speech_s
@@ -60,6 +69,23 @@ class LanguageGate:
     @property
     def enabled(self) -> bool:
         return self.mode != MODE_OFF
+
+    @property
+    def active(self) -> bool:
+        """Whether captures are held and judged: enabled with a loaded, working model."""
+        identifier = self.identifier
+        return (self.enabled and self._ready.is_set() and identifier is not None
+                and getattr(identifier, "usable", True))
+
+    def attach(self, identifier: LanguageIdentifier) -> bool:
+        """Load the model and start judging captures; False leaves the gate inactive."""
+        if not identifier.warm_up():
+            logger.error("Language gate stays inactive: model failed to load")
+            return False
+        self.identifier = identifier
+        self._ready.set()
+        logger.info("Language gate active (%s)", self.mode)
+        return True
 
     def decide(self, speech_pcm16: bytes, speech_s: float, elapsed_ms: float = 0.0) -> GateDecision:
         """Judge mono 16 kHz PCM16 speech frames (non-speech already removed)."""
@@ -81,8 +107,13 @@ class LanguageGate:
 
 
 def build_gate(selected: Optional[str]) -> Optional[LanguageGate]:
-    """The gate for config.json `stt_language`, or None when it does not apply."""
+    """The gate for config.json `stt_language`, or None when it does not apply.
+
+    The returned gate turns active once its model is loaded; a download in flight
+    leaves it inactive (fail open) rather than delaying HAL start.
+    """
     from hal.drivers.voice._internal import config as voice_cfg
+    from hal.drivers.voice.lang_id.model_store import ModelStore, read_manifest
 
     if voice_cfg.LANG_GATE_MODE == MODE_OFF:
         return None
@@ -90,16 +121,22 @@ def build_gate(selected: Optional[str]) -> Optional[LanguageGate]:
     if language is None:
         logger.info("Language gate off: no language selected (stt_language=%r)", selected)
         return None
-    identifier = LanguageIdentifier(
-        voice_cfg.LANG_ID_MODEL_PATH, voice_cfg.LANG_ID_LABELS_PATH, [language],
-        threads=voice_cfg.LANG_ID_THREADS, max_seconds=voice_cfg.LANG_GATE_SPEECH_S,
-        cpus=voice_cfg.LANG_ID_CPUS,
-    )
-    if not identifier.usable:
-        logger.warning("Language gate off: model unavailable (%s)", voice_cfg.LANG_ID_MODEL_PATH)
+
+    def identifier_for(model_path) -> LanguageIdentifier:
+        return LanguageIdentifier(
+            model_path, voice_cfg.LANG_ID_LABELS_PATH, [language],
+            threads=voice_cfg.LANG_ID_THREADS, max_seconds=voice_cfg.LANG_GATE_SPEECH_S,
+            cpus=voice_cfg.LANG_ID_CPUS,
+        )
+
+    local = voice_cfg.LANG_ID_MODEL_PATH
+    manifest = None if local.is_file() else read_manifest(voice_cfg.LANG_ID_MODEL_MANIFEST)
+    if not local.is_file() and manifest is None:
+        logger.warning("Language gate off: no model at %s and no valid pin at %s",
+                       local, voice_cfg.LANG_ID_MODEL_MANIFEST)
         return None
     gate = LanguageGate(
-        identifier,
+        None,
         mode=voice_cfg.LANG_GATE_MODE,
         min_prob=voice_cfg.LANG_GATE_MIN_PROB,
         speech_s=voice_cfg.LANG_GATE_SPEECH_S,
@@ -109,10 +146,19 @@ def build_gate(selected: Optional[str]) -> Optional[LanguageGate]:
         short_policy=voice_cfg.LANG_GATE_SHORT,
         min_speech_s=voice_cfg.LANG_GATE_MIN_SPEECH_S,
     )
-    threading.Thread(target=identifier.warm_up, daemon=True, name="lang-gate-warmup").start()
     logger.info(
         "Language gate %s: language=%s min_prob=%.2f speech=%.1fs (min %.1fs) max_wait=%.1fs short=%s",
         gate.mode, language, gate.min_prob, gate.speech_s, gate.min_speech_s,
         gate.max_wait_s, gate.short_policy,
     )
+    if local.is_file():
+        threading.Thread(
+            target=gate.attach, args=(identifier_for(local),), daemon=True, name="lang-gate-load",
+        ).start()
+    else:
+        gate.store = ModelStore(
+            voice_cfg.LANG_ID_CACHE_DIR, local.name, manifest["url"], manifest["sha256"],
+            size=manifest["size"],
+        )
+        gate.store.ensure(lambda path: gate.attach(identifier_for(path)))
     return gate

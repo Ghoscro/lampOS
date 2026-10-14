@@ -1464,6 +1464,10 @@ class VoiceService:
         gate = getattr(self, "_language_gate", None)
         if not isinstance(gate, LanguageGate) or not gate.enabled:
             return True
+        if not gate.active:
+            # Model still downloading/loading, or failed: never hold for nothing.
+            logger.info("[lang-gate] PASS (model not ready) — capture not judged")
+            return True
         started = time.monotonic()
         bytes_per_s = voice_cfg.STT_RATE * 2
         np = self._np

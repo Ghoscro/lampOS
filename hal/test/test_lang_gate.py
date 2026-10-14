@@ -50,6 +50,7 @@ def test_no_gate_without_a_selected_language():
 
 def test_no_gate_without_the_model(monkeypatch, tmp_path):
     monkeypatch.setattr(voice_cfg, "LANG_ID_MODEL_PATH", tmp_path / "missing.onnx")
+    monkeypatch.setattr(voice_cfg, "LANG_ID_MODEL_MANIFEST", tmp_path / "missing.json")
     assert build_gate("en") is None
 
 

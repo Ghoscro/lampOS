@@ -1175,7 +1175,7 @@ autonomous-os/
 
 ### HAL OTA Package
 
-For OTA distribution, `scripts/release/upload-hal.sh` zips the contents of `hal/` (excluding `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`):
+For OTA distribution, `scripts/release/upload-hal.sh` zips the contents of `hal/` (excluding `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`, `.coverage`, `drivers/voice/resources/ambernet.onnx`):
 
 ```
 hal-{version}.zip         # contents of hal/ at the zip root → unzipped into /opt/hal
@@ -1183,6 +1183,12 @@ hal-{version}.zip         # contents of hal/ at the zip root → unzipped into /
 ├── pyproject.toml, uv.lock
 └── VERSION_HAL
 ```
+
+The language-ID model (`ambernet.onnx`, ~117 MB) is not in the zip: OTA replaces
+`/opt/hal` on every update, so HAL downloads the release asset pinned in
+`drivers/voice/resources/ambernet.model.json` (URL + SHA-256) into
+`/opt/.models-hal`, which survives updates and is fetched once per model version
+(see `docs/realtime-voice.md`, "Language gate").
 
 ### HAL HTTP API (FastAPI on port 5001)
 
@@ -1224,7 +1230,7 @@ Run via `make upload-hal`. It sources `ota-config.sh` / `ota-metadata.sh`, then:
 
 1. `uv lock --project hal --python 3.12 --check` — refuses to publish a stale lockfile.
 2. Bumps the patch version in `hal/VERSION_HAL` (initializes `1.0.0` if missing).
-3. Zips the contents of `hal/` to `hal-<version>.zip` (excludes `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`).
+3. Zips the contents of `hal/` to `hal-<version>.zip` (excludes `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`, `.coverage`, and a local `drivers/voice/resources/ambernet.onnx`, which would otherwise override the pinned model on every device).
 4. Uploads it to `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/ota/hal/<version>.zip` (no-cache).
 5. Unpacks the signed `ota/metadata.json`, sets `hal.version`, `hal.url`, `hal.sha256`, `hal.updated_at` (an existing `min_version` is preserved — raise it with `promote-ota.sh`), re-signs and uploads it.
 

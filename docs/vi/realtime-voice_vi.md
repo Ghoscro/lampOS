@@ -3506,11 +3506,26 @@ chỉ-thuộc-os-server.
 `hal/drivers/voice/lang_id/` chạy AmberNet (ONNX fp32, 107 ngôn ngữ VoxLingua) để
 bỏ lời nói không thuộc ngôn ngữ đã chọn trước khi mở bất kỳ session nào. Ngôn ngữ
 đã chọn là `stt_language`; giá trị rỗng (tùy chọn "Auto" trên web), mã không được
-hỗ trợ, `HAL_LANG_GATE=off`, hoặc thiếu model sẽ tắt cổng. Model là
+hỗ trợ, `HAL_LANG_GATE=off`, hoặc không có cả model local lẫn pin hợp lệ sẽ tắt
+cổng. Label là file `ambernet.labels.json` đã commit (`HAL_LANG_ID_LABELS_PATH`).
+
+**Phân phối model** (`lang_id/model_store.py`). Một file local tại
 `HAL_LANG_ID_MODEL_PATH` (mặc định `hal/drivers/voice/resources/ambernet.onnx`,
-không commit; deploy cạnh file `ambernet.labels.json` đã commit, có thể ghi đè bằng
-`HAL_LANG_ID_LABELS_PATH`). Model được load trong một background thread khi HAL
-khởi động.
+bị git-ignore và loại khỏi zip HAL) được ưu tiên, dùng cho development. Nếu không,
+HAL đọc pin `HAL_LANG_ID_MODEL_MANIFEST` (mặc định
+`resources/ambernet.model.json`: `{"url": "https://…", "sha256": "…", "size": …}`,
+một release asset) và giữ model trong `HAL_LANG_ID_CACHE_DIR` (mặc định
+`/opt/.models-hal` trên thiết bị, cạnh `/opt/.uv-cache-hal`) dưới tên
+`ambernet-<sha256[:12]>.onnx`, file này giữ nguyên qua HAL OTA vì OTA chỉ thay
+`/opt/hal`. File cache bị thiếu hoặc sai hash được tải trong một background thread
+về `<file>.part`, kiểm tra SHA-256 rồi rename vào đúng chỗ, nên đường dẫn cuối cùng
+chỉ chứa model đã được xác minh; một lần tải lỗi bị xóa và thử lại sau 30 s, gấp
+đôi dần tới 600 s. Cả HAL khi khởi động lẫn voice loop đều không chờ việc tải này.
+
+Cổng chỉ **active** khi model đã load xong (`Language gate active`). Trước đó (đang
+tải, đang load lúc boot), hoặc khi model load lỗi, mọi capture ghi log
+`[lang-gate] PASS (model not ready)` và mở ngay, không giữ. Khi tải xong, cổng
+chuyển sang active mà không cần restart HAL.
 
 Tại điểm bàn giao VAD trong `_vad_loop`, `_language_gate_accepts` giữ capture cho
 tới khi có `HAL_LANG_GATE_SPEECH_S` (2.0 s) frame lời nói 16 kHz (RMS int16 tối
@@ -3521,7 +3536,7 @@ vào pre-roll, nên capture được chấp nhận đến session nguyên vẹn.
 nhận khi ngôn ngữ đã chọn chiếm ít nhất `HAL_LANG_GATE_MIN_PROB` (0.5) của softmax
 đầy đủ 107 ngôn ngữ. Dưới `HAL_LANG_GATE_MIN_SPEECH_S` (0.7) lời nói thì không thể
 đánh giá và `HAL_LANG_GATE_SHORT` quyết định (`reject`, mặc định, hoặc `accept`).
-Nếu inference lỗi, cổng chấp nhận. Playback bắt đầu trong lúc giữ sẽ bỏ capture.
+Nếu một lần inference lỗi, capture đó được chấp nhận. Playback bắt đầu trong lúc giữ sẽ bỏ capture.
 
 - **Chế độ live:** cổng là bước kiểm tra cuối trong `_live_decision`, sau các kiểm
   tra nhạc, nhiễu và wake-focus và trước `prepare_turn()`, nên một reject trả về
@@ -3552,6 +3567,13 @@ giọng tiếng Việt Linh ở 330 wpm, nền văn phòng, 2026-10-14):
 | Tiếng Anh ngắn: "Hey lamp! thanks." / "...say hello." / "...what's two plus two?" / "...what time is it?" | 1 trên 4 được chấp nhận (`too_short` ở 0.6 s; `in_set` 0.02 và 0.30 ở 0.9–1.2 s) |
 | Thời gian giữ từ `Speech detected` tới kết luận, capture được chấp nhận (n=21) | p50 2.9 s, max 4.3 s |
 | Inference AmberNet trên 2 s lời nói, 4× A55 (n=31) | p50 553 ms, p95 661 ms, max 1395 ms; load 1.07 s |
+
+Test tải trên lamp-75c9 (model được serve ở 1.5 MB/s, lần truyền đầu bị cắt ở 30 MB):
+HAL và voice loop khởi động ngay; ba capture trong lúc tải ghi log
+`PASS (model not ready)` trong vòng 31 ms sau `Speech detected` và mở STT; lần truyền
+bị cắt bị bỏ và thử lại sau 30 s; lần thử lại (116.9 MB trong 78.2 s) được xác minh,
+load trong 0.8 s và ghi log `Language gate active`; không cần restart, các capture
+tiếng Việt tiếp theo bị reject (`in_set` 0.00) và tiếng Anh được chấp nhận (0.64).
 
 Cổng chỉ quyết định có mở session hay không; nó không lọc audio bên trong một
 session đang mở. Trong 10 clip gồm 5 s tiếng Anh nối liền 5 s tiếng Việt (và 5 clip

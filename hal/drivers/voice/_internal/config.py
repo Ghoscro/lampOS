@@ -94,6 +94,13 @@ STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 _VOICE_RESOURCES = Path(__file__).resolve().parent.parent / "resources"
 LANG_ID_MODEL_PATH = Path(os.environ.get("HAL_LANG_ID_MODEL_PATH", str(_VOICE_RESOURCES / "ambernet.onnx")))
 LANG_ID_LABELS_PATH = Path(os.environ.get("HAL_LANG_ID_LABELS_PATH", str(_VOICE_RESOURCES / "ambernet.labels.json")))
+# Without a local model file, the release asset pinned here (url + sha256) is
+# downloaded in the background into LANG_ID_CACHE_DIR. The cache sits beside the
+# HAL tree (/opt/.models-hal on a device) because OTA replaces /opt/hal.
+LANG_ID_MODEL_MANIFEST = Path(os.environ.get("HAL_LANG_ID_MODEL_MANIFEST", str(_VOICE_RESOURCES / "ambernet.model.json")))
+LANG_ID_CACHE_DIR = Path(os.environ.get(
+    "HAL_LANG_ID_CACHE_DIR", str(Path(__file__).resolve().parents[4] / ".models-hal"),
+))
 # Pin identification to these CPU indices (e.g. "0,1,2,3" = four little A55 cores on
 # the lamp) so it never competes with the voice pipeline elsewhere; empty = no pin.
 LANG_ID_CPUS = [int(c) for c in os.environ.get("HAL_LANG_ID_CPUS", "").split(",") if c.strip()]
