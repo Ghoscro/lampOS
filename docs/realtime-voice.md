@@ -46,6 +46,15 @@ policy are reapplied on every call; unavailable, failed and sentinel results are
 not cached. This removes repeated inference on identical audio, not the first
 speech check, and does not change endpoint thresholds.
 
+`HAL_STREAM_NOISE_EVIDENCE=true` enables optional streaming Silero evidence
+(default off). A per-capture worker receives the same PCM sent to STT, with a
+256 KiB queue including in-flight bytes and a capture-duration sample limit.
+Only exact SHA256-matched, 512-sample-aligned processed prefixes from the same
+model may replace a whole-buffer scan. Changed, incomplete, cancelled, failed
+or overflowing evidence falls back immediately to the existing guard. Thresholds
+and fail-open/fail-closed policy remain unchanged; no inference wait is added
+to capture. Partial trailing blocks are not padded or reused.
+
 ## Experimental independent microphone capture
 
 `HAL_CONTINUOUS_MIC_CAPTURE=true` opts automatic, non-LIVE ALSA capture into an

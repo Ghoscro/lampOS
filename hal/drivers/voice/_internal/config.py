@@ -50,6 +50,7 @@ MAX_SESSION_DURATION_S = float(os.environ.get("HAL_MAX_SESSION_DURATION_S", "30"
 # Hands-free capture with recognized words can outlive the short noise/manual
 # capture ceiling. A hard limit aborts; it is never permission to execute a
 # possibly unfinished request.
+STREAM_NOISE_EVIDENCE_ENABLED = os.environ.get("HAL_STREAM_NOISE_EVIDENCE", "false").lower() == "true"
 TURN_END_ENABLED = os.environ.get("HAL_TURN_END_ENABLED", "true").lower() == "true"
 TURN_END_FALLBACK_S = float(os.environ.get("HAL_TURN_END_FALLBACK_S", "2.5"))
 TURN_END_MAX_PAUSE_S = float(os.environ.get("HAL_TURN_END_MAX_PAUSE_S", "6.0"))
