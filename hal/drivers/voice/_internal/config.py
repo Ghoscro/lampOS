@@ -50,12 +50,19 @@ MAX_SESSION_DURATION_S = float(os.environ.get("HAL_MAX_SESSION_DURATION_S", "30"
 # Hands-free capture with recognized words can outlive the short noise/manual
 # capture ceiling. A hard limit aborts; it is never permission to execute a
 # possibly unfinished request.
+STREAM_NOISE_EVIDENCE_ENABLED = os.environ.get("HAL_STREAM_NOISE_EVIDENCE", "false").lower() == "true"
 TURN_END_ENABLED = os.environ.get("HAL_TURN_END_ENABLED", "true").lower() == "true"
 TURN_END_FALLBACK_S = float(os.environ.get("HAL_TURN_END_FALLBACK_S", "2.5"))
 TURN_END_MAX_PAUSE_S = float(os.environ.get("HAL_TURN_END_MAX_PAUSE_S", "6.0"))
 TURN_END_MAX_DURATION_S = float(os.environ.get("HAL_TURN_END_MAX_DURATION_S", "180"))
 
 WARM_MIC = os.environ.get("HAL_WARM_MIC", "true").lower() == "true"
+# Experimental automatic ALSA capture isolation; manual and live paths are unchanged.
+CONTINUOUS_MIC_CAPTURE = os.environ.get("HAL_CONTINUOUS_MIC_CAPTURE", "false").lower() == "true"
+# Bound input retained while the consumer waits for a response or STT drain.
+CONTINUOUS_MIC_BACKLOG_S = max(1.024, min(10.0, float(
+    os.environ.get("HAL_CONTINUOUS_MIC_BACKLOG_S", "1.024")
+)))
 # Max echo-skip after TTS/music ends before resuming VAD (warm mic only).
 WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", "0.1"))
 
@@ -97,10 +104,17 @@ SPEAKER_MIN_AUDIO_S = _hal_config.SPEAKER_MIN_AUDIO_S
 
 _wake_name = _hal_config.resolve_device_type("friend")
 WAKE_WORD_PREFIXES = ("hello", "hey", "hi", "alo", "okay", "ok", "wake up")
-DEFAULT_WAKE_WORDS = [
-    *(f"{prefix} autonomous" for prefix in WAKE_WORD_PREFIXES),
-    *(f"{prefix} {_wake_name}" for prefix in WAKE_WORD_PREFIXES),
-]
+# Intern listens for a NAME anywhere in a sentence ("hey intern", "what time is it,
+# autonomous"); other devices keep greeting + name phrases at a sentence edge.
+WAKE_NAME_ANYWHERE = _wake_name.startswith("intern")
+if WAKE_NAME_ANYWHERE:
+    # "intern-v2" is the device class, not what people call it.
+    DEFAULT_WAKE_WORDS = ["autonomous", "intern"]
+else:
+    DEFAULT_WAKE_WORDS = [
+        *(f"{prefix} autonomous" for prefix in WAKE_WORD_PREFIXES),
+        *(f"{prefix} {_wake_name}" for prefix in WAKE_WORD_PREFIXES),
+    ]
 
 
 ENROLL_NUDGE_COOLDOWN_S = float(os.environ.get("HAL_ENROLL_NUDGE_COOLDOWN_S", str(30 * 60)))
