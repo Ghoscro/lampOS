@@ -1366,11 +1366,30 @@ class VoiceService:
                     # decided somebody is talking to the device, and the session it
                     # opens does its own endpointing from now on.
                     harness_voice = read_voice_mode()
+                    gate_verdict: list = []
+
+                    def language_gate_admits() -> bool:
+                        # Judge a capture once, even if live falls back to a turn.
+                        if not gate_verdict:
+                            gate_verdict.append(VoiceService._language_gate_accepts(
+                                self, mic, frame_size, device_rate, speech_pre_buffer,
+                            ))
+                        return gate_verdict[0]
+
                     decision = (
-                        self._live_decision(speech_pre_buffer)
+                        self._live_decision(speech_pre_buffer, admit=language_gate_admits)
                         if voice_cfg.LIVE_MODE and not bypass_realtime(harness_voice)
                         else "turn"
                     )
+                    if (decision == "turn" and not bypass_realtime(harness_voice)
+                            and not language_gate_admits()):
+                        # Same gate before the per-turn STT + realtime sessions open.
+                        logger.info("[turn] language gate rejected the capture — no session opened")
+                        decision = "skip"
+                    if decision == "skip" and pending_listening_cue_id is not None:
+                        from hal import app_state
+
+                        app_state.clear_listening_pending_cue(pending_listening_cue_id)
                     if decision == "live":
                         if self._live_session(
                             mic, frame_size, device_rate, speech_pre_buffer,
@@ -1396,7 +1415,9 @@ class VoiceService:
                     keepalive_session = None
                     speech_start = None
                     speech_pre_buffer = []
-                    if decision != "skip":
+                    if decision != "skip" or gate_verdict == [False]:
+                        # A gate reject consumed the held audio: replaying its stale
+                        # frames as the next trigger's pre-roll would splice old speech.
                         lookback.clear()
                     self._silero_reset_state()
                     logger.info("VAD resumed — mic active, waiting for next speech")
@@ -1425,6 +1446,107 @@ class VoiceService:
                         energy,
                     )
 
+    def set_language_gate(self, gate) -> None:
+        """Install the AmberNet language gate for live sessions (None disables it)."""
+        self._language_gate = gate
+
+    def _language_gate_accepts(self, mic, frame_size: int, device_rate: int,
+                               speech_pre_buffer: list) -> bool:
+        """Open a live session only for speech the gate identifies as the selected language.
+
+        Holds the capture until the gate has `speech_s` of speech (or the utterance
+        ends, or `max_wait_s` passes). Every frame read here is appended to
+        speech_pre_buffer at the STT rate, and the mic keeps being read while the
+        model runs on its own worker, so an accepted capture reaches the session whole.
+        """
+        from hal.drivers.voice.lang_id.gate import LanguageGate
+
+        gate = getattr(self, "_language_gate", None)
+        if not isinstance(gate, LanguageGate) or not gate.enabled:
+            return True
+        started = time.monotonic()
+        bytes_per_s = voice_cfg.STT_RATE * 2
+        np = self._np
+
+        def pcm_rms(frame: bytes) -> float:
+            # Pre-roll frames are PCM16 bytes at the STT rate, not mic arrays.
+            samples = np.frombuffer(frame[: len(frame) // 2 * 2], dtype=np.int16)
+            return rms(samples, np) if samples.size else 0.0
+
+        speech = bytearray()
+        for frame in speech_pre_buffer:
+            if pcm_rms(frame) >= gate.speech_rms:
+                speech += frame
+        silence_s = 0.0
+
+        def read_frame() -> None:
+            nonlocal silence_s
+            data, overflowed = mic.read(frame_size)
+            if overflowed:
+                return
+            frame = resample_to_stt(data, device_rate, voice_cfg.STT_RATE, np)
+            speech_pre_buffer.append(frame)
+            if pcm_rms(frame) >= gate.speech_rms:
+                speech.extend(frame)
+                silence_s = 0.0
+            else:
+                silence_s += len(frame) / bytes_per_s
+
+        while (len(speech) / bytes_per_s < gate.speech_s and self._running
+               and time.monotonic() - started < gate.max_wait_s
+               and silence_s < gate.utterance_gap_s):
+            if self._tts_is_speaking() or self._music_is_playing():
+                logger.info("[lang-gate] playback started while holding the capture — dropped")
+                return False
+            read_frame()
+
+        speech_s = len(speech) / bytes_per_s
+        result: list = []
+        worker = threading.Thread(
+            target=lambda: result.append(
+                gate.decide(bytes(speech), speech_s, (time.monotonic() - started) * 1000)
+            ),
+            daemon=True, name="lang-gate",
+        )
+        worker.start()
+        while worker.is_alive() and self._running:
+            read_frame()  # keep draining the mic so no speech is lost
+        worker.join()
+        decision = result[0]
+        guess = decision.guess
+        logger.info(
+            "[lang-gate] %s (%s): %s in_set=%.2f on %.1fs speech, held %.0fms",
+            "ACCEPT" if decision.accept else "REJECT", decision.reason,
+            guess.language if guess else "-", guess.in_set if guess else 0.0,
+            speech_s, (time.monotonic() - started) * 1000,
+        )
+        if voice_cfg.LANG_GATE_DUMP_DIR:
+            VoiceService._dump_language_gate(decision, bytes(speech), b"".join(speech_pre_buffer))
+        return decision.accept
+
+    @staticmethod
+    def _dump_language_gate(decision, speech: bytes, capture: bytes) -> None:
+        """Debug aid: save what the gate scored and the whole held capture."""
+        import wave
+        from pathlib import Path
+
+        try:
+            out = Path(voice_cfg.LANG_GATE_DUMP_DIR)
+            out.mkdir(parents=True, exist_ok=True)
+            guess = decision.guess
+            stem = "%s_%s_%s_in%.2f" % (
+                time.strftime("%H%M%S"), "accept" if decision.accept else "reject",
+                decision.reason, guess.in_set if guess else 0.0,
+            )
+            for suffix, pcm in (("speech", speech), ("capture", capture)):
+                with wave.open(str(out / f"{stem}_{suffix}.wav"), "wb") as w:
+                    w.setnchannels(1)
+                    w.setsampwidth(2)
+                    w.setframerate(voice_cfg.STT_RATE)
+                    w.writeframes(pcm)
+        except Exception as e:
+            logger.warning("[lang-gate] dump failed: %s", e)
+
     def _hardware_aec_live_entry(self) -> bool:
         return (isinstance(getattr(self, "_live_gate", None), AdaptiveLiveGate)
                 and hal_config.REALTIME_ENABLED
@@ -1437,11 +1559,12 @@ class VoiceService:
         return (energy >= voice_cfg.RMS_THRESHOLD
                 and self._webrtcvad_is_speech(data, rate))
 
-    def _live_decision(self, pre_roll: list) -> str:
+    def _live_decision(self, pre_roll: list, admit=None) -> str:
         """What this VAD trigger should become: "live", "turn" or "skip".
 
         "skip" costs nothing at all, which is the point: a click must not open a billed
-        live session OR an STT session.
+        live session OR an STT session. `admit`, when given, is the last check before
+        the live session is prepared (the language gate); False skips the capture.
         """
         if not hal_config.REALTIME_ENABLED:
             return "turn"
@@ -1466,6 +1589,10 @@ class VoiceService:
         ):
             logger.info("[live] wake focus closed — using STT to check the wake phrase")
             return "turn"
+
+        if admit is not None and not admit():
+            logger.info("[live] language gate rejected the capture — no session opened")
+            return "skip"
 
         self._realtime.prepare_turn()
 
