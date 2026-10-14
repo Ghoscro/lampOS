@@ -449,3 +449,56 @@ def test_smoke_and_flame_streaks_independent():
     assert p._update_streaks(T0 + 12, [smoke, fire]) == {"smoke"}
     assert p._update_streaks(T0 + 18, [fire]) == {"flame"}
     assert p.to_dict()["streak_kinds"] == ["flame"]
+
+
+# --- dedup: safe_fire 30 min, others re-alert every 60 s (Task 4.3) -------------
+
+def _continuous(kind: FireHazardEnum, seconds: float):
+    p, clock, events = _always_owlv2([_hz(kind)])
+    _run_checks(p, clock, int(seconds // STEP) + 1)
+    return [t - T0 for t, _ in events.sent], [m for _, m in events.sent]
+
+
+def test_hazard_fire_realerts_every_60s():
+    times, msgs = _continuous(FireHazardEnum.HAZARD_FIRE, 132)
+    assert times == [12.0, 72.0, 132.0]
+    assert all(b - a >= 60 for a, b in zip(times, times[1:]))
+    assert set(msgs) == {"Fire hazard detected: hazard_fire"}
+
+
+def test_unsure_fire_realerts_every_60s():
+    times, _ = _continuous(FireHazardEnum.UNSURE_FIRE, 132)
+    assert times == [12.0, 72.0, 132.0]
+
+
+def test_smoke_realerts_every_60s():
+    times, msgs = _continuous(FireHazardEnum.SMOKE, 132)
+    assert times == [12.0, 72.0, 132.0]
+    assert set(msgs) == {"Fire hazard detected: smoke"}
+
+
+def test_safe_fire_dedup_30min():
+    p, clock, events = _always_owlv2([_hz(FireHazardEnum.SAFE_FIRE)])
+    _run_checks(p, clock, int(1800 // STEP) + 1)  # t = 0 .. 1800
+    assert [t - T0 for t, _ in events.sent] == [12.0]
+    for _ in range(3):
+        clock.t += STEP
+        p._check_impl(FRAME)
+    assert len(events.sent) == 2 and events.sent[1][0] - events.sent[0][0] >= 1800
+
+
+def test_new_type_alerts_immediately_within_window():
+    fire, smoke = _hz(FireHazardEnum.HAZARD_FIRE), _hz(FireHazardEnum.SMOKE)
+    p, clock, events = _always_owlv2([fire], [fire], [fire, smoke], [fire, smoke], [fire, smoke])
+    _run_checks(p, clock, 5)  # smoke from t=12, confirmed at t=24
+    assert [(t - T0, m) for t, m in events.sent] == [
+        (12.0, "Fire hazard detected: hazard_fire"),
+        (24.0, "Fire hazard detected: smoke"),
+    ]
+
+
+def test_dedup_window_per_type():
+    p, _, _ = _always_owlv2()
+    assert p._dedup_window(FireHazardEnum.SAFE_FIRE.value) == config.FIRE_HAZARD_DEDUP_WINDOW_S
+    for t in (FireHazardEnum.HAZARD_FIRE, FireHazardEnum.UNSURE_FIRE, FireHazardEnum.SMOKE):
+        assert p._dedup_window(t.value) == config.FIRE_HAZARD_REALERT_S

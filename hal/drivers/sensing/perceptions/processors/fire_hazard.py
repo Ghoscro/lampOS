@@ -338,7 +338,9 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
 
         self._state_lock: threading.RLock = threading.RLock()
         self._last_sent_by_type: dict[str, float] = {}
+        # safe_fire re-alerts every FIRE_HAZARD_DEDUP_WINDOW_S; the rest every FIRE_HAZARD_REALERT_S.
         self._dedup_window_s: float = config.FIRE_HAZARD_DEDUP_WINDOW_S
+        self._realert_s: float = config.FIRE_HAZARD_REALERT_S
 
         # "flame" / "smoke" -> (first_seen, last_seen). A flame streak survives a
         # safe/hazard/unsure label flip; the type is taken from the confirming frame.
@@ -432,6 +434,13 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
             return True, "gate_unavailable"
         return False, "gate_miss"
 
+    def _dedup_window(self, hazard_type: str) -> float:
+        """Min gap between alerts of one type: a safe fire (fireplace, candle in a
+        holder) re-alerts rarely, an unsafe one keeps alerting while confirmed."""
+        if hazard_type == FireHazardEnum.SAFE_FIRE:
+            return self._dedup_window_s
+        return self._realert_s
+
     def _flush_buffer(self, now: float) -> None:
         with self._state_lock:
             if not self._hazard_buffer:
@@ -445,7 +454,7 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
             self._snapshot_buffer.clear()
             self._last_flush_ts = now
 
-        cutoff = now - self._dedup_window_s
+        cutoff = now - max(self._dedup_window_s, self._realert_s)
         with self._state_lock:
             self._last_sent_by_type = {
                 k: ts for k, ts in self._last_sent_by_type.items() if ts >= cutoff
@@ -459,7 +468,7 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         for hazard_type in by_type:
             with self._state_lock:
                 last_ts = self._last_sent_by_type.get(hazard_type)
-                if last_ts is not None and (now - last_ts) < self._dedup_window_s:
+                if last_ts is not None and (now - last_ts) < self._dedup_window(hazard_type):
                     logger.debug(
                         "[fire_hazard] dedup drop: %s (seen %.1fs ago)",
                         hazard_type, now - last_ts,
