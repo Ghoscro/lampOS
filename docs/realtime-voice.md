@@ -32,6 +32,13 @@ rebuild finishes during capture, buffered audio resumes immediately; if it is
 still running at the endpoint, the existing readiness wait is capped at two
 seconds before fallback. Cancellation never uploads a late completed take.
 
+Automatic non-LIVE endpoint noise checks use contiguous audio windows, including
+quiet frames. Intermittent loud frames are never concatenated across quiet gaps.
+A pending loud window must be classified before closing; accepted windows update
+the speech clock/trim index to their last above-RMS frame, not their quiet tail.
+All-quiet windows do not refresh the clock, including VAD failure fallback.
+Thresholds, manual/Harness capture and the separate LIVE idle detector are unchanged.
+
 Post-capture Silero checks reuse one valid metrics result within the same capture
 only when PCM bytes, sample rate and detector identity match exactly. Changed or
 trimmed audio is analyzed again. Admission thresholds and fail-open/fail-closed
