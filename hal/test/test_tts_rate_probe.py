@@ -179,3 +179,36 @@ def test_is_device_busy_classification():
         PortAudioError("Unanticipated host error", -9999, (8, -22, "Invalid argument"))
     )
     assert not module._is_device_busy(ValueError("boom"))
+
+
+def test_output_rate_reprobes_after_busy_boot(monkeypatch):
+    # Busy at boot leaves no rate; the next speech re-probes once the speaker is free.
+    sd = FakeSD(lambda rate, n: busy() if n == 1 else None)
+    svc = _svc(monkeypatch, sd)
+    svc._probe_device_rate()
+    assert svc._device_rate is None
+    assert svc._output_rate() == 44100
+    assert svc._rate_cache == {"speaker": 44100}
+    assert sd.opens == [44100, 44100]
+
+
+def test_output_rate_falls_back_while_still_busy(monkeypatch):
+    sd = FakeSD(lambda rate, n: busy())
+    svc = _svc(monkeypatch, sd)
+    assert svc._output_rate() == module.TTS_SAMPLE_RATE
+    assert sd.opens == [44100]
+
+
+def test_output_rate_known_rate_does_not_open(monkeypatch):
+    sd = FakeSD()
+    svc = _svc(monkeypatch, sd, rate=48000)
+    assert svc._output_rate() == 48000
+    assert sd.opens == []
+
+
+def test_output_rate_skips_probe_while_own_stream_is_open(monkeypatch):
+    sd = FakeSD()
+    svc = _svc(monkeypatch, sd)
+    svc._stream = object()
+    assert svc._output_rate() == module.TTS_SAMPLE_RATE
+    assert sd.opens == []

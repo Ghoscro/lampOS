@@ -347,14 +347,17 @@ class TTSService:
         self._stream_lock = threading.Lock()
         self._write_started_ts: Optional[float] = None
         self._ack_chime_cache = None
+        if self._sd:
+            # Started even with no rate yet (speaker busy at boot): it idles while
+            # _stream is None and keeps the stream a later speak opens warm.
+            threading.Thread(
+                target=self._silence_keepalive,
+                daemon=True,
+                name="tts-silence-keepalive",
+            ).start()
         if self._sd and self._device_rate:
             try:
                 self._ensure_stream(self._device_rate)
-                threading.Thread(
-                    target=self._silence_keepalive,
-                    daemon=True,
-                    name="tts-silence-keepalive",
-                ).start()
             except Exception:
                 logger.exception("Persistent stream init failed")
         threading.Thread(
@@ -582,6 +585,20 @@ class TTSService:
             "No supported sample rate found for output device [%s] — keeping rate=%s",
             dev_label, known,
         )
+
+    def _output_rate(self) -> int:
+        """Playback rate for a new speech. Re-probes while no rate is known (the
+        speaker was busy at boot) so it is not stuck at TTS_SAMPLE_RATE until restart;
+        a known rate returns without opening the device. Skipped while the persistent
+        stream is open: HAL's own stream would make every probe report busy.
+        """
+        if (
+            self._device_rate is None
+            and self._sd is not None
+            and getattr(self, "_stream", None) is None
+        ):
+            self._probe_device_rate()
+        return self._device_rate or TTS_SAMPLE_RATE
 
     @property
     def available(self) -> bool:
@@ -1226,7 +1243,7 @@ class TTSService:
         stopped = (item.cancelled.is_set if hal_config.LIVE_MODE else
                    lambda: item.cancelled.is_set() or self._stop_event.is_set())
         try:
-            dst_rate = self._device_rate or TTS_SAMPLE_RATE
+            dst_rate = self._output_rate()
             chunks = self._split_text_into_growing_sentence_chunks(item.text)
             for chunk_text in chunks:
                 if stopped():
@@ -1811,7 +1828,7 @@ class TTSService:
         logger.info("[tts-timing] stage=worker_start text_key=%s",
                     hashlib.sha256(text.encode()).hexdigest()[:12])
         sd = self._sd
-        dst_rate = self._device_rate or TTS_SAMPLE_RATE
+        dst_rate = self._output_rate()
         chunks = self._split_text_into_growing_sentence_chunks(text)
         for i, c in enumerate(chunks):
             preview = c[:140] + ("..." if len(c) > 140 else "")
@@ -2152,7 +2169,7 @@ class TTSService:
         if self._backend is not None:
             samples = np.clip(samples * self._backend.volume_boost, -1.0, 1.0)
 
-        dst_rate = self._device_rate or TTS_SAMPLE_RATE
+        dst_rate = self._output_rate()
         if src_rate != dst_rate:
             samples = self._resample(samples, src_rate, dst_rate)
         samples = samples.reshape(-1, 1)
