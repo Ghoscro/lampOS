@@ -85,6 +85,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.drivers.voice._internal.turn_endpoint import TurnEndpoint
 from hal.drivers.voice._internal.smart_turn import SmartTurnDetector
+from hal.drivers.voice._internal.noise_evidence import NoiseEvidence
 from hal.telemetry import voice_metrics
 from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.drivers.voice._internal.live_history import LiveHistory
@@ -874,11 +875,21 @@ class VoiceService:
                 cache_key = (voice_cfg.STT_RATE, pcm_bytes)
             cached = (cache_key is not None and metrics_cache.get("key") == cache_key
                       and metrics_cache.get("detector") is self._rt_noise_vad)
+            stream = metrics_cache.get("stream") if metrics_cache is not None else None
+            source = metrics_cache.get("stream_source", {}) if metrics_cache is not None else {}
+            streamed = False
             if cached:
                 metrics = metrics_cache["metrics"]
             else:
-                metrics = self._rt_noise_vad.speech_metrics(pcm_int16, voice_cfg.STT_RATE)
-                self._rt_noise_vad.reset_state()
+                metrics = None
+                if (cache_key is not None and isinstance(stream, NoiseEvidence)
+                        and source.get("session") is getattr(self._rt_noise_vad, "_session", None)
+                        and source.get("session") is not None):
+                    metrics = stream.metrics(cache_key[1])
+                    streamed = metrics is not None
+                if metrics is None:
+                    metrics = self._rt_noise_vad.speech_metrics(pcm_int16, voice_cfg.STT_RATE)
+                    self._rt_noise_vad.reset_state()
             peak, mean, ratio, span_ratio, span_seconds = metrics
             if (not cached and cache_key is not None
                     and tuple(metrics) != (1, 1, 1, 1, 0)
@@ -886,6 +897,8 @@ class VoiceService:
                     and all(0 <= value <= 1 for value in metrics[:4])
                     and span_seconds >= 0):
                 metrics_cache.clear()
+                if stream is not None:
+                    metrics_cache.update(stream=stream, stream_source=source)
                 metrics_cache.update(key=cache_key, detector=self._rt_noise_vad, metrics=tuple(metrics))
             if not fail_open and (peak, mean, ratio, span_ratio, span_seconds) == (1, 1, 1, 1, 0):
                 # The VAD's failure sentinel is not positive acoustic evidence.
@@ -900,11 +913,11 @@ class VoiceService:
             logger.info(
                 "[realtime] noise-guard metrics: peak=%.3f mean=%.3f voiced_ratio=%.3f "
                 "span_ratio=%.3f span_seconds=%.2f voiced_ms=%.1f "
-                "min_ratio=%.2f min_voiced_ms=%.1f accepted=%s cached=%s",
+                "min_ratio=%.2f min_voiced_ms=%.1f accepted=%s cached=%s streamed=%s",
                 peak, mean, ratio, span_ratio, span_seconds,
                 span_ratio * span_seconds * 1000,
                 hal_config.REALTIME_NOISE_SPEECH_RATIO,
-                hal_config.VOICE_NOISE_MIN_VOICED_MS, is_speech, cached,
+                hal_config.VOICE_NOISE_MIN_VOICED_MS, is_speech, cached, streamed,
             )
             return is_speech
         except Exception as e:
@@ -2392,15 +2405,18 @@ class VoiceService:
                 tts.end_input_capture(token)
 
         followup_ids = set()
+        evidence_holder = []
         reply_stop = threading.Event()
         try:
             return VoiceService._stream_session_impl(
                 self, mic, frame_size, device_rate, preconnected_session,
                 speech_pre_buffer, pending_listening_cue_id, harness_voice,
                 manual_capture, release_input, followup_ids,
-                wake_focus_at_entry, reply_stop,
+                wake_focus_at_entry, reply_stop, evidence_holder=evidence_holder,
             )
         finally:
+            for evidence in evidence_holder:
+                evidence.close()
             with self._automatic_reply_lock:
                 if self._automatic_reply_stop is reply_stop:
                     self._automatic_reply_stop = None
@@ -2434,6 +2450,7 @@ class VoiceService:
         followup_ids=None,
         wake_focus_at_entry=None,
         reply_stop=None,
+        evidence_holder=None,
     ):
         """Stream audio to STT provider until silence or TTS interrupts."""
         # A capture owns at most one PCM/metrics entry. Never retain it on the
@@ -2801,6 +2818,45 @@ class VoiceService:
                     realtime_start_failed = True
                     realtime_turn_started = False
             return True
+        noise_evidence = None
+        if (voice_cfg.STREAM_NOISE_EVIDENCE_ENABLED and evidence_holder is not None
+                and input_policy.automatic and manual_capture is None and not harness_listening
+                and not voice_cfg.LIVE_MODE and realtime_allowed and hal_config.REALTIME_ENABLED
+                and hal_config.REALTIME_PROVIDER.strip().lower() == "gemini"):
+            previous_evidence = getattr(self, "_automatic_noise_evidence", None)
+            if not isinstance(previous_evidence, NoiseEvidence) or previous_evidence.done.is_set():
+                source = {}
+
+                def classifier_factory():
+                    vad = SileroVADFilter(voice_cfg.SILERO_MODEL_PATH, self._np)
+                    if not vad.available:
+                        raise RuntimeError("Silero unavailable")
+                    source["session"] = vad._session
+
+                    def classify(block):
+                        scores = []
+                        metrics = vad.speech_metrics(
+                            self._np.frombuffer(block, dtype=self._np.int16),
+                            voice_cfg.STT_RATE, score_sink=scores,
+                        )
+                        if len(scores) != 1 or metrics == (1, 1, 1, 1, 0):
+                            raise RuntimeError("Missing Silero evidence")
+                        return scores[0]
+                    return classify
+
+                try:
+                    noise_evidence = NoiseEvidence(
+                        classifier_factory,
+                        max_samples=int(max(voice_cfg.MAX_SESSION_DURATION_S,
+                                            voice_cfg.TURN_END_MAX_DURATION_S) * voice_cfg.STT_RATE),
+                        speech_threshold=voice_cfg.SILERO_VAD_THRESHOLD,
+                    ).start()
+                    self._automatic_noise_evidence = noise_evidence
+                    evidence_holder.append(noise_evidence)
+                    noise_metrics_cache.update(stream=noise_evidence, stream_source=source)
+                except Exception:
+                    noise_evidence = None
+                    logger.warning("Streaming noise evidence unavailable; using existing guard", exc_info=True)
         try:
             pre_buffer = []
             if independent_stt:
@@ -2923,6 +2979,8 @@ class VoiceService:
 
                 for frame in all_pre:
                     audio_buffer.append(frame)
+                    if noise_evidence is not None:
+                        noise_evidence.append(frame)
                     if realtime_allowed and hal_config.REALTIME_ENABLED:
                         audio_f32 = pcm16_bytes_to_float32(frame)
                         audio_f32 = resample_float32(
@@ -3061,6 +3119,8 @@ class VoiceService:
                             endpoint_ts = time.monotonic()
                             break
                 audio_buffer.append(resampled)
+                if noise_evidence is not None:
+                    noise_evidence.append(resampled)
 
                 # Parallel: stream to realtime model (non-blocking queue put).
                 # During a pending noise-drop rebuild retain frames locally and
@@ -3156,6 +3216,8 @@ class VoiceService:
             else:
                 logger.error("STT stream error: %s", e)
         finally:
+            if noise_evidence is not None:
+                noise_evidence.finish()
             self._backchannel.reset()
             self._listening = False
             release_input()
