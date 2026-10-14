@@ -21,6 +21,7 @@ from hal.drivers.sensing.crypto import CryptoSession, DLCrypto, EncryptionUnavai
 from hal.drivers.sensing.perceptions.typing import SendEventCallable
 from hal.drivers.sensing.perceptions.utils import PerceptionStateObservers
 from hal.drivers.sensing.presence_service import PresenseService
+from hal.telemetry.fire_hazard_metrics import FireHazardStats
 
 from .base import Perception
 from .fire_gate import FireGate, GateVerdict
@@ -74,6 +75,9 @@ class RemoteFireHazardDetector:
         self._crypto: CryptoSession | None = None
         self._backoff_until: float = 0.0
         self._rate_limited_in_a_row: int = 0
+        # Telemetry only: how the last detect() ended, and whether it fell back to classes.
+        self.last_outcome: str = "none"
+        self.last_preset_fallback: bool = False
 
         self._fire_classes: list[str] = self._load_classes(self.DEFAULT_FIRE_CLASSES_PATH)
         self._smoke_classes: list[str] = self._load_classes(self.DEFAULT_SMOKE_CLASSES_PATH)
@@ -109,7 +113,9 @@ class RemoteFireHazardDetector:
         None means no observation (no URL, backoff, encryption unavailable,
         network or HTTP error, bad reply); [] means the server looked and found nothing.
         """
+        self.last_preset_fallback = False
         if not self._url:
+            self.last_outcome = "no_url"
             return None
 
         objects = self._call_api(frame)
@@ -162,6 +168,7 @@ class RemoteFireHazardDetector:
         the preset (HTTP 400) gets the same frame again with the class list.
         """
         if time.time() < self._backoff_until:
+            self.last_outcome = "backoff"
             return None
         preset = config.FIRE_HAZARD_PRESET
         try:
@@ -172,13 +179,16 @@ class RemoteFireHazardDetector:
                 if resp is not None and resp.status_code == 400:
                     logger.warning("[fire_hazard] preset %s rejected (400), retrying with classes", preset)
                     used_preset = False
+                    self.last_preset_fallback = True
                     resp = self._post({"image_b64": image_b64, "classes": self._all_classes})
             else:
                 resp = self._post({"image_b64": image_b64, "classes": self._all_classes})
             if resp is None:
+                self.last_outcome = "encryption_unavailable"
                 return None
 
             if resp.status_code == 429:
+                self.last_outcome = "rate_limited"
                 self._rate_limited_in_a_row += 1
                 delay = min(
                     _RATE_LIMIT_BACKOFF_MAX_S,
@@ -192,6 +202,7 @@ class RemoteFireHazardDetector:
                 return None
             self._rate_limited_in_a_row = 0
             if resp.status_code != 200:
+                self.last_outcome = "http_error"
                 logger.warning("[fire_hazard] HTTP %d: %s", resp.status_code, resp.text[:200])
                 return None
 
@@ -202,16 +213,24 @@ class RemoteFireHazardDetector:
 
             detections = data.get("detections", []) if isinstance(data, dict) else data
             if not isinstance(detections, list):
+                self.last_outcome = "error"
                 logger.warning("[fire_hazard] unexpected reply: %.200r", data)
                 return None
             if used_preset:
                 self._check_preset_classes(detections)
+            self.last_outcome = "ok"
             return detections
 
+        except requests.Timeout as e:
+            self.last_outcome = "timeout"
+            logger.warning("[fire_hazard] request timed out: %s", e)
+            return None
         except requests.RequestException as e:
+            self.last_outcome = "error"
             logger.warning("[fire_hazard] request failed: %s", e)
             return None
         except Exception as e:
+            self.last_outcome = "error"
             logger.exception("[fire_hazard] unexpected error: %s", e)
             return None
 
@@ -364,6 +383,10 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         self._owlv2_inflight: bool = False  # guarded by _state_lock
         self._owlv2_future: Future[None] | None = None
 
+        self._stats: FireHazardStats = FireHazardStats(start=clock())
+        # Hazard type -> first_seen of the streak that confirmed it (alert telemetry).
+        self._confirm_first_seen: dict[str, float] = {}
+
     @override
     def _check_impl(self, data: cv2t.MatLike) -> None:
         if data is None:
@@ -371,6 +394,7 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
             return
 
         now = self._clock()
+        self._stats.maybe_report(now, gate_state=self._gate.state)
 
         if now - self._last_check_ts < config.FIRE_HAZARD_CHECK_INTERVAL_S:
             self._flush_buffer(now)
@@ -410,7 +434,13 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
             with self._lock:
                 if self._retired:
                     return
+            t0 = time.monotonic()
             hazards = self._detector.detect(frame)
+            self._stats.record_owlv2(
+                getattr(self._detector, "last_outcome", "unknown"), (time.monotonic() - t0) * 1000.0,
+            )
+            if getattr(self._detector, "last_preset_fallback", False):
+                self._stats.record_owlv2("preset_fallback", None)
             if hazards is not None:
                 # None = no observation: streaks and escalation stay as they were.
                 with self._state_lock:
@@ -420,6 +450,8 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
                         )
                     confirmed_kinds = self._update_streaks(ts, hazards)
                     confirmed = [h for h in hazards if _kind(h) in confirmed_kinds]
+                    for h in confirmed:
+                        self._confirm_first_seen[h.type.value] = self._streaks[_kind(h)][0]
                     if confirmed:
                         annotated = self._annotate_frame(frame, confirmed)
                         self._hazard_buffer.extend(confirmed)
@@ -467,9 +499,11 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
             if now < self._escalated_until:
                 return True, "escalated"
         result = self._gate.run(frame)
+        self._stats.record_gate(result.verdict.value, result.infer_ms)
         if result.verdict is GateVerdict.HIT:
             with self._state_lock:
                 self._escalated_until = now + config.FIRE_HAZARD_ESCALATION_HOLD_S
+            self._stats.record_escalation()
             logger.info("[fire_hazard] gate hit: %s %.2f — escalating to OWLv2", result.label, result.score)
             return True, "gate_hit"
         if result.verdict is GateVerdict.UNAVAILABLE:
@@ -533,6 +567,11 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         logger.info("[fire_hazard] %s (%d snapshots)", message, len(snapshots))
         self._send_event("fire_hazard.detected", message, "fire_hazard", snapshots, None)
 
+        with self._state_lock:
+            first_seen = [self._confirm_first_seen[t] for t in new_types if t in self._confirm_first_seen]
+        age_ms = int((now - min(first_seen)) * 1000) if first_seen else -1
+        self._stats.record_alert(new_types, age_ms, self._gate.state)
+
     _HAZARD_COLORS: dict[FireHazardEnum, tuple[int, int, int]] = {
         FireHazardEnum.HAZARD_FIRE: (0, 0, 255),
         FireHazardEnum.UNSURE_FIRE: (0, 165, 255),
@@ -574,4 +613,5 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         # An in-flight POST finishes on its own (bounded by FIRE_HAZARD_API_TIMEOUT_S);
         # the retired checks in _owlv2_round/_flush_buffer drop its result.
         self._owlv2_executor.shutdown(wait=False, cancel_futures=True)
+        self._stats.maybe_report(self._clock(), final=True, gate_state=self._gate.state)
         self._gate.close()
