@@ -42,6 +42,10 @@ type ConnectorRefreshTarget struct {
 	Connector    string
 	RefreshToken string
 	ExpiresAt    int64
+	// Vars are the per-connection values (for example a store domain) the cloud
+	// needs to address the right tenant when it refreshes this connector. Nil
+	// for connectors with static endpoints.
+	Vars map[string]string
 }
 
 // ConnectorWriter owns persistence (and any side-effects like writing an MCP

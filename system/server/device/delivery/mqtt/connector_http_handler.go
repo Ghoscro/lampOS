@@ -3,6 +3,7 @@ package mqtthandler
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -151,7 +152,7 @@ func (h *DeviceMQTTHandler) GetConnector(c *gin.Context) {
 		Connected:   true,
 		AuthType:    creds.AuthType,
 		UserEmail:   creds.UserEmail,
-		Credentials: creds.Credentials,
+		Credentials: publicCredentials(creds.Credentials),
 		ObtainedAt:  creds.ObtainedAt,
 	}))
 }
@@ -194,4 +195,27 @@ func (h *DeviceMQTTHandler) RemoveConnector(c *gin.Context) {
 		"connector": code,
 		"removed":   removed,
 	}))
+}
+
+// secretCredentialKey matches credential keys that hold a secret. The read
+// endpoint never returns them: a connected page only needs the non-secret
+// identity fields (a page ID, a store domain, a client ID).
+var secretCredentialKey = regexp.MustCompile(`(?i)secret|token|password|passwd|api[_-]?key|private`)
+
+// publicCredentials returns the credentials map without secret-bearing keys.
+func publicCredentials(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return in
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		if secretCredentialKey.MatchString(k) {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
