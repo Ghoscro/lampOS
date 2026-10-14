@@ -201,8 +201,6 @@ class AnimationService:
         # joint's contact floor is that envelope plus the profile margin. None keeps
         # the fixed floors everywhere.
         self._contact_profile = contact_profile
-        # Keeps that envelope up to date from the recordings the lamp plays anyway.
-        self._passive = PassiveLearner(contact_profile) if contact_profile is not None else None
         # (recording, frame, channel, sample) of the last contact stop during playback.
         self._contact_stop_at: Optional[tuple] = None
         self._learning: Optional[Set[str]] = None
@@ -212,6 +210,16 @@ class AnimationService:
         # holds): {joint or "lag:<joint>": floor}. Those moves have no envelope, and
         # without these the weight-bearing joints are not watched there at all.
         self._contact_off_playback = dict(contact_off_playback or {})
+        # Keeps the envelope up to date from the recordings the lamp plays anyway.
+        self._passive = (
+            PassiveLearner(
+                contact_profile, self._passive_defaults(),
+                load_ceiling=overload_guard.threshold
+                if overload_guard is not None and isinstance(overload_guard.threshold, int) else 1000,
+                caps=self._torque_limits,
+            )
+            if contact_profile is not None else None
+        )
         # on_contact(joint, load) runs after a contact stop (its own chime); without
         # it the contact stop falls back to on_overload.
         self._on_contact = on_contact
@@ -230,6 +238,22 @@ class AnimationService:
         # Joints whose Torque_Enable=0 write failed at the cut; retried every tick until
         # confirmed, so a dropped packet cannot leave one joint pushing for the lockout.
         self._overload_pending_off: Set[str] = set()
+
+    def _passive_defaults(self) -> Dict[str, int]:
+        """The floor each envelope channel starts from: what applied before it learned.
+
+        The contact stop's fixed load floors, then the off_playback ones (load and lag),
+        then a capped joint's torque cap (its load cannot reach past it).
+        """
+        defaults: Dict[str, int] = {}
+        threshold = self._contact.threshold if self._contact is not None else None
+        if isinstance(threshold, dict):
+            defaults.update(threshold)
+        for name, floor in self._contact_off_playback.items():
+            defaults.setdefault(name, floor)
+        for joint, cap in self._torque_limits.items():
+            defaults.setdefault(joint, cap)
+        return defaults
 
     @property
     def _tracking_active(self) -> bool:

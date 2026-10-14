@@ -492,18 +492,28 @@ Six conditions are enforced today; setup-incomplete is reserved.
       keeps the envelope current without a learn run: every play of a recording
       (`music_*` included) is sampled like a learn run, and counts only when it ran from
       its first frame to its last with no contact stop, cut-off, direct move or learn
-      run in it. The last 5 clean runs per recording stay in RAM, and each clean run
-      with all 5 updates that recording's envelope with their second highest value per
-      frame, so one run a hand brushed does not count. A recording with no envelope
-      gets one only 30 min after its first clean run, from the per-frame max (the
-      loosest), so a few minutes of cold servos do not set it. Updates move slowly both
-      ways: a frame rises at most 3 % load / 1° lag, so a push that stays under the
-      floor cannot walk it up quickly, and falls a quarter of the gap, so a few cool
-      runs do not make it touchy. A run that trips never counts, so a contact pause
-      nobody holds through (it ends without a torque release) is taken as a false
-      stop instead: the envelope within ±3 frames of it rises one step toward the
-      sample that stopped it, at most 3 times a day per recording, and does not fall
-      for 24 h after. Updates are saved at most every 10 min. The envelope is saved with the `torque_limit`
+      run in it. The last 5 clean runs per recording stay in RAM, and from 2 on (as many
+      as a learn run plays) each clean run updates that recording's envelope toward
+      them: their per-frame max while fewer than 5 (the loosest), then the second
+      highest, so one run a hand brushed does not count. A higher value replaces the
+      envelope at once, so a heavy frame stops the arm only once, up to the cut-off's
+      80 % for load and 30° for lag; a lower one comes down a quarter of the gap per
+      update, so a few cool runs do not make it touchy. A recording's first envelope
+      comes down the same way from the fixed floors it ran under before (Lamp: the
+      contact `load` floors, then `off_playback` load and lag, then a capped joint's
+      `torque_limit`), so it starts where the lamp stood. A frame a later run reaches for
+      the first time (20 Hz sampling skips some 30 fps frames on each run) falls from
+      its learned neighbours within ±3 frames instead, so it does not hold its whole
+      floor window up at the fixed floor. A run that trips never
+      counts, so a contact pause nobody holds through (it ends without a torque
+      release) is taken as a false stop instead: the envelope within ±3 frames of it
+      rises at once to where that sample would not have stopped it, at most 10 times
+      a day per recording, and does not come down for 24 h after. A capped joint
+      stopped at its `torque_limit` (within 1 %) rises to the cap across the whole
+      recording instead, leaving that joint to its lag there: lamp-c0a4's elbow
+      reaches its 60 % cap at varying `idle` frames, and stopped `idle` every 5 s on a
+      41 % floor. Updates are saved at most once a minute (the file is overwritten,
+      about 100 KB a write). The envelope is saved with the `torque_limit`
       it was learned under (`contact_profile.json.signature`); after a `torque_limit`
       change it is dropped at startup and the fixed floors apply until it is learned
       again (an envelope learned at 60 % tripped lamp-c0a4's idle `base_pitch` about

@@ -1166,7 +1166,7 @@ def test_a_stop_nobody_holds_through_loosens_the_envelope_there(passive_rig):
     passive_rig.clock.advance(3.0)
     passive_rig.svc._overload_tick()
     assert not passive_rig.svc.contact_active
-    assert passive_rig.profile.envelope("stretching")["base_pitch"][4] == 330
+    assert passive_rig.profile.envelope("stretching")["base_pitch"][4] == 500 - 150 + 1
 
 
 def test_a_stop_held_into_a_torque_release_leaves_the_envelope(passive_rig):

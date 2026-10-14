@@ -470,19 +470,28 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       envelope luôn mới mà không cần lượt học: mỗi lần phát một recording (kể cả
       `music_*`) được lấy mẫu như lượt học, và chỉ được tính khi chạy từ frame đầu tới
       frame cuối mà không có contact stop, cut-off, di chuyển trực tiếp hay lượt học nào
-      xen vào. 5 lần chạy sạch gần nhất của mỗi recording được giữ trong RAM, và mỗi lần
-      chạy sạch khi đã đủ 5 lần cập nhật envelope của recording đó bằng giá trị lớn thứ
-      hai từng frame, nên một lần bị tay chạm nhẹ không được tính. Recording chưa có
-      envelope chỉ được tạo envelope sau 30 phút kể từ lần chạy sạch đầu tiên, lấy giá
-      trị tối đa từng frame (lỏng nhất), để vài phút servo còn nguội không quyết định nó.
-      Cập nhật đi chậm cả hai chiều: mỗi frame tăng tối đa 3 % tải / 1° lag, nên một cú
-      đẩy luôn nằm dưới sàn không kéo nó lên nhanh được, và giảm một phần tư khoảng
-      chênh, nên vài lần chạy lúc servo mát không làm đèn quá nhạy. Lần chạy nào bị trip
-      không bao giờ được tính, nên một lần dừng do va chạm mà không ai giữ qua hết thời
-      gian pause (kết thúc mà không nhả torque) được coi là dừng nhầm: envelope trong ±3
-      frame quanh đó tăng một bước về phía mẫu đã làm dừng, tối đa 3 lần mỗi ngày cho
-      mỗi recording, và không giảm trong 24 giờ sau đó. Cập nhật được lưu tối đa 10 phút
-      một lần. Envelope được lưu
+      xen vào. 5 lần chạy sạch gần nhất của mỗi recording được giữ trong RAM, và từ 2 lần
+      trở lên (bằng số lần một lượt học chạy) mỗi lần chạy sạch kéo envelope của
+      recording đó về phía chúng: giá trị tối đa từng frame khi chưa đủ 5 lần (lỏng
+      nhất), đủ 5 lần thì giá trị lớn thứ hai, nên một lần bị tay chạm nhẹ không được
+      tính. Giá trị cao hơn thay envelope ngay, nên một frame tải nặng chỉ làm dừng một
+      lần, tối đa tới 80 % của cut-off cho tải và 30° cho lag; giá trị thấp hơn chỉ giảm
+      một phần tư khoảng chênh mỗi lần, nên vài lần chạy lúc servo mát không làm đèn
+      quá nhạy. Envelope đầu tiên của một recording cũng giảm như vậy từ các sàn cố định
+      nó dùng trước đó (Lamp: sàn `load` của contact, rồi tải và lag `off_playback`, rồi
+      `torque_limit` của khớp bị giới hạn), nên nó bắt đầu đúng chỗ đèn đang đứng. Frame
+      mà một lần chạy sau mới lấy mẫu lần đầu (lấy mẫu 20 Hz bỏ sót một số frame 30 fps
+      mỗi lần) thì giảm từ giá trị đã học của các frame lân cận trong ±3 frame, để nó
+      không giữ cả cửa sổ sàn ở mức sàn cố định. Lần
+      chạy nào bị trip không bao giờ được tính, nên một lần dừng do va chạm mà không ai
+      giữ qua hết thời gian pause (kết thúc mà không nhả torque) được coi là dừng nhầm:
+      envelope trong ±3 frame quanh đó tăng ngay tới mức mà mẫu đó không còn làm dừng,
+      tối đa 10 lần mỗi ngày cho mỗi recording, và không giảm trong 24 giờ sau đó. Khớp
+      bị giới hạn torque mà dừng đúng ở `torque_limit` (trong khoảng 1 %) thì tăng tới
+      mức trần trên toàn bộ recording, để khớp đó chỉ còn được canh bằng lag ở đó:
+      elbow của lamp-c0a4 chạm trần 60 % ở những frame `idle` khác nhau, và đã làm
+      `idle` dừng mỗi 5 giây với sàn 41 %. Cập nhật được lưu tối đa 1 phút một lần
+      (ghi đè file, khoảng 100 KB mỗi lần). Envelope được lưu
       kèm `torque_limit` lúc học (`contact_profile.json.signature`); đổi `torque_limit`
       thì khi khởi động envelope bị bỏ và dùng các sàn cố định cho tới khi học lại
       (envelope học ở 60 % làm idle của lamp-c0a4 trip `base_pitch` khoảng 300 lần trong
