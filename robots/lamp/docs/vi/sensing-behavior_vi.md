@@ -269,9 +269,11 @@ YOLO26-S end-to-end 320×320, ONNX Runtime trên CPU với `HAL_FIRE_HAZARD_GATE
 thread, ghim vào các core chậm. Tên class lấy từ metadata của ONNX. Gate "hit" khi điểm
 `fire` hoặc `smoke` cao nhất từ `HAL_FIRE_HAZARD_GATE_SCORE_THRESHOLD` (0.2) trở lên. Đo
 được khoảng 170 ms mỗi frame với 2 thread trên đèn đang chạy HAL. Model được tải ở lần
-dùng đầu tiên về `/root/local/models/yolo26s_fire_e2e_320_v1.onnx`
-(`onnx_models/yolo26s_fire_e2e_320_v1.onnx` trên CDN model). Việc nạp model chạy nền và
-không bao giờ chặn lượt kiểm tra.
+dùng đầu tiên về `/root/local/models/yolo26s_fire_e2e_320.onnx`
+(`onnx_models/yolo26s_fire_e2e_320.onnx` trên CDN model). Việc nạp model chạy nền và
+không bao giờ chặn lượt kiểm tra. Đèn chỉ tải file khi chưa có, nên thay file trên CDN
+không cập nhật những đèn đã có file: xoá file trên đèn (lần nạp sau sẽ tải file mới) hoặc
+đổi tên file.
 
 | Kết quả gate | Lượt kiểm tra làm gì |
 |---|---|

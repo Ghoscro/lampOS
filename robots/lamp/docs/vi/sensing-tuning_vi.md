@@ -418,8 +418,8 @@ Dòng `flushing` hiển thị danh sách label thô — đó là mode trên các
 |---|---|---|
 | `HAL_FIRE_HAZARD_CHECK_INTERVAL_S` | `5.0` | Khoảng cách tối thiểu giữa hai lượt kiểm tra. Lượt kiểm tra chạy theo tick sensing 2 s, nên 5 s nghĩa là khoảng 6 s một lần; 0 thì kiểm tra mỗi tick |
 | `HAL_FIRE_HAZARD_GATE_SCORE_THRESHOLD` | `0.2` | Gate trên đèn: điểm `fire`/`smoke` từ mức này trở lên thì gửi frame tới OWLv2 và bắt đầu escalation |
-| `HAL_FIRE_HAZARD_GATE_MODEL_PATH` | `/root/local/models/yolo26s_fire_e2e_320_v1.onnx` | File model gate (thư mục theo `HAL_FACE_MODEL_PATH` nếu biến đó được đặt) |
-| `HAL_FIRE_HAZARD_GATE_MODEL_URL` | CDN model `onnx_models/yolo26s_fire_e2e_320_v1.onnx` | Nơi tải model gate ở lần dùng đầu tiên |
+| `HAL_FIRE_HAZARD_GATE_MODEL_PATH` | `/root/local/models/yolo26s_fire_e2e_320.onnx` | File model gate (thư mục theo `HAL_FACE_MODEL_PATH` nếu biến đó được đặt) |
+| `HAL_FIRE_HAZARD_GATE_MODEL_URL` | CDN model `onnx_models/yolo26s_fire_e2e_320.onnx` | Nơi tải model gate ở lần dùng đầu tiên |
 | `HAL_FIRE_HAZARD_GATE_THREADS` | `2` | Số thread intra-op của ONNX Runtime cho gate (CPU, core chậm) |
 | `HAL_FIRE_HAZARD_ESCALATION_HOLD_S` | `10.0` | OWLv2 tiếp tục chạy mỗi lượt kiểm tra cho tới chừng này giây sau lần cuối nó thấy lửa/khói |
 | `HAL_FIRE_HAZARD_PRESET` | `fire_hazard_v1` | Preset prompt của server, gửi thay cho 46 chuỗi class; rỗng = luôn gửi class |
@@ -445,7 +445,7 @@ tail -f /var/log/hal/server.log | grep -E '\[fire_(hazard|gate)\]'
 ```
 
 ```
-[fire_gate] model ready in <ms> ms (/root/local/models/yolo26s_fire_e2e_320_v1.onnx, 320x320, 2 threads, threshold 0.20, names {...})
+[fire_gate] model ready in <ms> ms (/root/local/models/yolo26s_fire_e2e_320.onnx, 320x320, 2 threads, threshold 0.20, names {...})
 [fire_hazard] gate hit: fire 0.41 — escalating to OWLv2
 [fire_hazard] Fire hazard detected: hazard_fire (1 snapshots)
 [fire_gate] model unavailable (...); OWLv2 runs every check until it loads

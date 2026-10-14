@@ -268,9 +268,11 @@ end-to-end at 320×320, ONNX Runtime on the CPU with `HAL_FIRE_HAZARD_GATE_THREA
 threads pinned to the slow cores. Class names come from the ONNX metadata. The gate hits
 when the best `fire` or `smoke` score is at least `HAL_FIRE_HAZARD_GATE_SCORE_THRESHOLD`
 (0.2). Measured at about 170 ms per frame with 2 threads on a lamp with HAL running. The
-model is downloaded on first use to `/root/local/models/yolo26s_fire_e2e_320_v1.onnx`
-(`onnx_models/yolo26s_fire_e2e_320_v1.onnx` on the model CDN). Loading runs in the
-background and never blocks a check.
+model is downloaded on first use to `/root/local/models/yolo26s_fire_e2e_320.onnx`
+(`onnx_models/yolo26s_fire_e2e_320.onnx` on the model CDN). Loading runs in the
+background and never blocks a check. A lamp downloads the file only when it is missing,
+so replacing the file on the CDN does not update lamps that already have it: delete the
+local file (the next load fetches the new one) or change the file name.
 
 | Gate result | What the check does |
 |---|---|

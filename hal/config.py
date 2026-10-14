@@ -332,11 +332,11 @@ FIRE_HAZARD_GATE_SCORE_THRESHOLD = float(os.environ.get("HAL_FIRE_HAZARD_GATE_SC
 # Gate model file; downloaded from FIRE_HAZARD_GATE_MODEL_URL on first use.
 FIRE_HAZARD_GATE_MODEL_PATH = os.environ.get(
     "HAL_FIRE_HAZARD_GATE_MODEL_PATH",
-    os.path.join(os.environ.get("HAL_FACE_MODEL_PATH", "/root/local/models"), "yolo26s_fire_e2e_320_v1.onnx"),
+    os.path.join(os.environ.get("HAL_FACE_MODEL_PATH", "/root/local/models"), "yolo26s_fire_e2e_320.onnx"),
 )
 FIRE_HAZARD_GATE_MODEL_URL = os.environ.get(
     "HAL_FIRE_HAZARD_GATE_MODEL_URL",
-    "https://storage.googleapis.com/autonomous-models/onnx_models/yolo26s_fire_e2e_320_v1.onnx",
+    "https://storage.googleapis.com/autonomous-models/onnx_models/yolo26s_fire_e2e_320.onnx",
 )
 # ORT intra-op threads for the gate (CPU, slow cores).
 FIRE_HAZARD_GATE_THREADS = int(os.environ.get("HAL_FIRE_HAZARD_GATE_THREADS", "2"))

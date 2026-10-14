@@ -475,8 +475,8 @@ The `flushing` line shows the raw label list — that's the mode-over-samples th
 |---|---|---|
 | `HAL_FIRE_HAZARD_CHECK_INTERVAL_S` | `5.0` | Min gap between checks. Checks run on the 2 s sensing tick, so 5 s means about every 6 s; 0 checks every tick |
 | `HAL_FIRE_HAZARD_GATE_SCORE_THRESHOLD` | `0.2` | On-lamp gate: a `fire`/`smoke` score at or above this sends the frame to OWLv2 and starts escalation |
-| `HAL_FIRE_HAZARD_GATE_MODEL_PATH` | `/root/local/models/yolo26s_fire_e2e_320_v1.onnx` | Gate model file (the directory follows `HAL_FACE_MODEL_PATH` when that is set) |
-| `HAL_FIRE_HAZARD_GATE_MODEL_URL` | model CDN `onnx_models/yolo26s_fire_e2e_320_v1.onnx` | Where the gate model is downloaded from on first use |
+| `HAL_FIRE_HAZARD_GATE_MODEL_PATH` | `/root/local/models/yolo26s_fire_e2e_320.onnx` | Gate model file (the directory follows `HAL_FACE_MODEL_PATH` when that is set) |
+| `HAL_FIRE_HAZARD_GATE_MODEL_URL` | model CDN `onnx_models/yolo26s_fire_e2e_320.onnx` | Where the gate model is downloaded from on first use |
 | `HAL_FIRE_HAZARD_GATE_THREADS` | `2` | ONNX Runtime intra-op threads for the gate (CPU, slow cores) |
 | `HAL_FIRE_HAZARD_ESCALATION_HOLD_S` | `10.0` | OWLv2 keeps running every check until this long after its last fire/smoke sighting |
 | `HAL_FIRE_HAZARD_PRESET` | `fire_hazard_v1` | Server prompt preset sent instead of the 46 class strings; empty = always send the classes |
@@ -502,7 +502,7 @@ tail -f /var/log/hal/server.log | grep -E '\[fire_(hazard|gate)\]'
 ```
 
 ```
-[fire_gate] model ready in <ms> ms (/root/local/models/yolo26s_fire_e2e_320_v1.onnx, 320x320, 2 threads, threshold 0.20, names {...})
+[fire_gate] model ready in <ms> ms (/root/local/models/yolo26s_fire_e2e_320.onnx, 320x320, 2 threads, threshold 0.20, names {...})
 [fire_hazard] gate hit: fire 0.41 — escalating to OWLv2
 [fire_hazard] Fire hazard detected: hazard_fire (1 snapshots)
 [fire_gate] model unavailable (...); OWLv2 runs every check until it loads
