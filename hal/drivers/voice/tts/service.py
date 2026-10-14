@@ -196,6 +196,31 @@ class _PendingSpeech:
         self.failed = False
 
 
+# PortAudio error codes (sounddevice.PortAudioError.args[1]).
+_PA_DEVICE_UNAVAILABLE = -9985
+_PA_UNANTICIPATED_HOST_ERROR = -9999
+_ALSA_EBUSY = -16
+# Rates at which speech plays at full quality; anything lower sounds muffled.
+_FULL_QUALITY_RATES = (44100, 48000)
+
+
+def _is_device_busy(exc: BaseException) -> bool:
+    """True when a stream open failed because the output device is held by another
+    process (or PortAudio is re-initialising), not because the rate is unsupported.
+    Trying lower rates cannot help then; it only locks in whichever rate is being
+    tried when the device frees up (#688).
+    """
+    args = getattr(exc, "args", ())
+    code = args[1] if len(args) > 1 else None
+    if code == _PA_DEVICE_UNAVAILABLE:
+        return True
+    if code == _PA_UNANTICIPATED_HOST_ERROR and len(args) > 2:
+        host = args[2]
+        if isinstance(host, tuple) and len(host) > 1 and host[1] == _ALSA_EBUSY:
+            return True
+    return "re-init in progress" in str(exc)
+
+
 class TTSService:
     """Text-to-speech with pluggable backend + sounddevice streaming playback."""
 
@@ -494,7 +519,13 @@ class TTSService:
         return str(idx)
 
     def _probe_device_rate(self, force: bool = False, use_cache: bool = True):
-        """Probe the output device to find a supported sample rate."""
+        """Probe the output device to find a supported sample rate.
+
+        use_cache=False skips the cached rate and opens the device again, but the
+        known-good rate is only replaced once a new rate is verified. A busy device
+        stops the probe and keeps the known-good rate: walking down the list while
+        the speaker is held locks in whatever rate it reaches when it frees (#688).
+        """
         if not force and self._device_rate:
             return
 
@@ -502,18 +533,15 @@ class TTSService:
             self._output_device if self._output_device is not None else "default"
         )
         key = self._device_key()
-        if use_cache:
-            cached = self._rate_cache.get(key)
-            if cached:
-                self._device_rate = cached
-                logger.info(
-                    "Output device [%s]: rate=%d Hz (cached for '%s')",
-                    dev_label, cached, key,
-                )
-                return
-        else:
-            self._rate_cache.pop(key, None)
-        self._device_rate = None
+        cached = self._rate_cache.get(key)
+        if use_cache and cached:
+            self._device_rate = cached
+            logger.info(
+                "Output device [%s]: rate=%d Hz (cached for '%s')",
+                dev_label, cached, key,
+            )
+            return
+        known = self._device_rate or cached
         for rate in [44100, 48000, 16000, 32000, 24000, 22050, 8000]:
             try:
                 from hal.drivers.audio_route import stream_open_guard
@@ -526,17 +554,34 @@ class TTSService:
                     dtype="float32",
                 ) as stream:
                     _ = stream.write(np.zeros(probe_frames, dtype=np.float32))
-                self._device_rate = rate
-                self._rate_cache[key] = rate
-                logger.info("Output device [%s]: verified rate=%d Hz", dev_label, rate)
-                break
             except Exception as e:
-                logger.debug("Failed to play audio with rate=%d Hz due to e=%s", dev_label, e)
+                if _is_device_busy(e):
+                    self._device_rate = known
+                    logger.warning(
+                        "Output device [%s] busy at rate=%d Hz — keeping rate=%s, not probing lower rates (%s)",
+                        dev_label, rate, known, e,
+                    )
+                    return
+                logger.debug(
+                    "Output device [%s]: rate=%d Hz failed: %s", dev_label, rate, e
+                )
+                continue
+            self._device_rate = rate
+            self._rate_cache[key] = rate
+            if rate in _FULL_QUALITY_RATES:
+                logger.info("Output device [%s]: verified rate=%d Hz", dev_label, rate)
+            else:
+                logger.warning(
+                    "Output device [%s]: verified rate=%d Hz, below 44.1 kHz — speech will sound muffled",
+                    dev_label, rate,
+                )
+            return
 
-        if self._device_rate is None:
-            logger.warning(
-                "No supported sample rate found for output device [%s]", dev_label
-            )
+        self._device_rate = known
+        logger.warning(
+            "No supported sample rate found for output device [%s] — keeping rate=%s",
+            dev_label, known,
+        )
 
     @property
     def available(self) -> bool:
