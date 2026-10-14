@@ -438,7 +438,11 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       độ]}}`. Các entry lag có ích ở chỗ load bất lực: một khớp đang chạm trần torque,
       hoặc một khớp mềm mà tay chỉ làm chậm lại, sẽ tụt sau goal của nó. Khi đặt
       `contact.lag_margin` (Lamp: `35` = 3,5°), khớp nào trễ hơn lag đã học đúng mức đó
-      cũng tính là va chạm. `POST /servo/contact/learn` (hoặc nút **Learn** ở mục Touch
+      cũng tính là va chạm. Goal là giá trị `LeLampFollower.send_action` ghi gần nhất,
+      khi mọi khớp đều có một giá trị ghi trong giây vừa qua (`GOAL_CACHE_S`), nên mỗi
+      nhịp lúc phát recording chỉ đọc `Present_Load` và `Present_Position`; sau một lần
+      di chuyển raw, một lần bật/tắt torque, hoặc khi không có lần ghi nào gần như vậy,
+      `Goal_Position` được đọc lại từ servo. `POST /servo/contact/learn` (hoặc nút **Learn** ở mục Touch
       Sensitivity trang Servo của web Monitor; `{"recordings": [...], "runs": 2}`; mặc định mọi recording trừ `music_*`) chạy tự do mỗi recording `runs` lần ở
       nền và lưu giá trị tối đa từng frame; vùng quanh tay đèn phải trống, vì thứ gì nó
       chạm vào đều được học là bình thường. Khi một recording đã học chạy frame của chính

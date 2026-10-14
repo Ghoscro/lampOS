@@ -1,6 +1,7 @@
 """Servo overload cut-off: the guard's timing, and the service's cut / lockout / retry."""
 
 import sys
+import time
 import types
 from unittest import mock
 
@@ -190,6 +191,7 @@ class _FakeBus:
         self.goals = dict(self.positions)
         self.fail_read = False
         self.writes = []
+        self.reads = []
         self.raw_writes = []
         self.port_handler = object()
         self.packet_handler = self
@@ -197,6 +199,7 @@ class _FakeBus:
     def sync_read(self, name, normalize=True):
         if self.fail_read:
             raise ConnectionError("no status packet")
+        self.reads.append(name)
         if name == "Present_Position":
             return dict(self.positions)
         if name == "Goal_Position":
@@ -228,6 +231,11 @@ class _FakeRobot:
         self.bus = _FakeBus()
         self.goal_writes_blocked = False
         self.sent = []
+        self.last_goal = {}
+        self.last_write_monotonic = 0.0
+
+    def forget_goals(self):
+        self.last_goal = {}
 
     def send_action(self, action):
         # Mirrors LeLampFollower.send_action's overload gate.
@@ -528,12 +536,71 @@ def test_the_follower_drops_goals_while_blocked():
     robot = types.SimpleNamespace(
         is_connected=True, goal_writes_blocked=True, bus=mock.Mock(),
         config=types.SimpleNamespace(max_relative_target=None), last_write_monotonic=0.0, joint_limits={},
+        last_goal={},
     )
     assert LeLampFollower.send_action(robot, {"base_yaw.pos": 5.0}) == {}
     robot.bus.sync_write.assert_not_called()
+    assert robot.last_goal == {}
     robot.goal_writes_blocked = False
     LeLampFollower.send_action(robot, {"base_yaw.pos": 5.0})
     robot.bus.sync_write.assert_called_once_with("Goal_Position", {"base_yaw": 5.0})
+    assert robot.last_goal == {"base_yaw": 5.0}
+
+
+def test_the_follower_forgets_its_goals_when_a_write_fails():
+    pytest.importorskip("lerobot")
+    from hal.follower.hal_follower import LeLampFollower
+
+    robot = types.SimpleNamespace(
+        is_connected=True, goal_writes_blocked=False, bus=mock.Mock(),
+        config=types.SimpleNamespace(max_relative_target=None), last_write_monotonic=0.0, joint_limits={},
+        last_goal={"base_yaw": 5.0},
+    )
+    robot.forget_goals = lambda: setattr(robot, "last_goal", {})
+    robot.bus.sync_write.side_effect = ConnectionError("port gone")
+    with pytest.raises(ConnectionError):
+        LeLampFollower.send_action(robot, {"base_yaw.pos": 9.0})
+    assert robot.last_goal == {}
+
+
+# --- Lag from the goals just written ---------------------------------------------
+
+
+def _written(rig, goal=12.5, age=0.0):
+    rig.svc.robot.last_goal = {joint: goal for joint in JOINTS}
+    rig.svc.robot.last_write_monotonic = time.monotonic() - age
+
+
+def test_lag_takes_the_goals_just_written_without_reading_them_back(rig):
+    _written(rig)
+    assert rig.svc._read_lags() == {"lag:" + joint: 25 for joint in JOINTS}
+    assert rig.bus.reads == ["Present_Position"]
+
+
+def test_lag_reads_the_register_for_a_joint_with_no_written_goal(rig):
+    _written(rig)
+    del rig.svc.robot.last_goal["wrist_pitch"]
+    assert rig.svc._read_lags() == {"lag:" + joint: 0 for joint in JOINTS}
+    assert "Goal_Position" in rig.bus.reads
+
+
+def test_lag_reads_the_register_once_no_goal_was_written_for_a_while(rig):
+    """A sync_write has no reply: a goal a servo missed is not trusted for long."""
+    _written(rig, age=2.0)
+    assert rig.svc._read_lags() == {"lag:" + joint: 0 for joint in JOINTS}
+    assert "Goal_Position" in rig.bus.reads
+
+
+def test_a_raw_move_forgets_the_written_goals(rig):
+    _written(rig)
+    rig.svc.move_to_raw({"base_yaw": 2048}, duration=0.05)
+    assert rig.svc.robot.last_goal == {}
+
+
+def test_a_torque_cut_forgets_the_written_goals(rig):
+    _written(rig)
+    _stall(rig)
+    assert rig.svc.robot.last_goal == {}
 
 
 # --- Contact stop (halt in place on a short hit) --------------------------------

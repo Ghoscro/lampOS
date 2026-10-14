@@ -458,7 +458,11 @@ Six conditions are enforced today; setup-incomplete is reserved.
       "lag:<joint>": [max |goal - present| per frame, 0.1 deg]}}`. The lag entries
       matter where load cannot help: a joint at its torque cap, or a soft one a hand
       simply slows, falls behind its goal. With `contact.lag_margin` set (Lamp: `35` =
-      3.5°) a joint trailing its learned lag by that much is a hit too.
+      3.5°) a joint trailing its learned lag by that much is a hit too. The goal is
+      the one `LeLampFollower.send_action` last wrote when every joint has one from
+      the last second (`GOAL_CACHE_S`), so a playback tick reads only `Present_Load`
+      and `Present_Position`; after a raw move or a torque change, or with no write
+      that recent, `Goal_Position` is read back from the servos.
       `POST /servo/contact/learn` (or **Learn** under Touch Sensitivity on the web
       Monitor Servo page; `{"recordings": [...], "runs": 2}`; default every
       recording except `music_*`) plays each recording free `runs` times in the

@@ -67,6 +67,12 @@ LEARN_ATTEMPTS = 3
 # contact stop's detection delay near its hold time.
 OVERLOAD_POLL_S = 0.05
 
+# The lag check takes each joint's goal from the follower's last write while one landed
+# this recently, instead of reading Goal_Position back: one of the three reads a tick
+# makes during playback. A sync_write has no reply, so a goal a servo missed is only
+# trusted this long; with no write since, the register is read as before.
+GOAL_CACHE_S = 1.0
+
 from hal.drivers.motors.recording_timing import (  # noqa: E402
     RECORDING_TIME_COLUMN,
     SERVO_MAX_DPS,
@@ -290,6 +296,7 @@ class AnimationService:
             ph = self.robot.bus.port_handler
             pk = self.robot.bus.packet_handler
             from scservo_sdk import COMM_SUCCESS
+            self._forget_goals()
             for motor_name, motor_obj in self.robot.bus.motors.items():
                 sid = motor_obj.id
                 pgain = self._SERVO_PGAIN.get(sid, 32)
@@ -878,6 +885,9 @@ class AnimationService:
         try:
             return self._move_to_raw(target_raw, duration, should_abort)
         finally:
+            # Raw writes bypass send_action, and one may land after a tracker frame.
+            with self.bus_lock:
+                self._forget_goals()
             self._direct_move = False
             self._direct_move_ended = self._contact_now()
 
@@ -1049,6 +1059,7 @@ class AnimationService:
             return errors
         bus = self.robot.bus
         with self.bus_lock:
+            self._forget_goals()
             for motor_name in bus.motors:
                 try:
                     bus.write("Torque_Enable", motor_name, 0)
@@ -1244,6 +1255,7 @@ class AnimationService:
     def _write_torque_off(self, motors: List[str]) -> Set[str]:
         """Torque_Enable=0 on each motor; returns the ones whose write failed. Lock held by caller."""
         failed: Set[str] = set()
+        self._forget_goals()
         for motor_name in motors:
             try:
                 self.robot.bus.write("Torque_Enable", motor_name, 0)
@@ -1318,7 +1330,9 @@ class AnimationService:
         """Per-joint |goal - present| in 0.1 deg, or None when the bus read fails."""
         try:
             with self.bus_lock:
-                goal = self.robot.bus.sync_read("Goal_Position")
+                goal = self._written_goals()
+                if goal is None:
+                    goal = self.robot.bus.sync_read("Goal_Position")
                 present = self.robot.bus.sync_read("Present_Position")
         except Exception as e:
             logger.debug("[contact] lag read failed: %s", e)
@@ -1327,6 +1341,21 @@ class AnimationService:
             LAG_PREFIX + motor: int(round(abs(goal[motor] - present[motor]) * 10))
             for motor in goal if motor in present
         }
+
+    def _written_goals(self) -> Optional[Dict[str, float]]:
+        """Every joint's goal as last written, or None to read the register instead."""
+        goal = getattr(self.robot, "last_goal", None)
+        if not goal or any(motor not in goal for motor in self.robot.bus.motors):
+            return None
+        if time.monotonic() - getattr(self.robot, "last_write_monotonic", 0.0) > GOAL_CACHE_S:
+            return None
+        return goal
+
+    def _forget_goals(self) -> None:
+        """Goal_Position was or may be written outside send_action. Bus lock held by caller."""
+        forget = getattr(self.robot, "forget_goals", None)
+        if forget is not None:
+            forget()
 
     def learn_contact_profile(self, recordings: List[str], runs: int = 2) -> None:
         """Start a learn run: play each recording `runs` times free, then save."""
