@@ -43,6 +43,14 @@ fail-closed; không cache kết quả unavailable, lỗi hay sentinel. Thay đ�
 inference lặp trên cùng audio, không bỏ lần kiểm tra speech đầu và không đổi
 ngưỡng chốt câu.
 
+`HAL_STREAM_NOISE_EVIDENCE=true` bật bằng chứng Silero tính dần, mặc định tắt.
+Worker mỗi capture nhận cùng PCM gửi STT; queue 256 KiB tính cả phần đang xử lý,
+và giới hạn tổng sample theo thời lượng capture. Chỉ prefix đã xử lý, căn theo
+512 sample, khớp SHA256 và cùng model mới thay được phép quét cả đoạn. Dữ liệu
+khác, chưa đủ, bị hủy, lỗi hoặc tràn queue quay ngay về guard cũ. Không đổi
+threshold hay chính sách fail-open/fail-closed, không thêm chờ inference trên
+capture. Block lẻ cuối không được pad hoặc tái sử dụng.
+
 ## Thử nghiệm luồng đọc microphone riêng
 
 `HAL_CONTINUOUS_MIC_CAPTURE=true` bật luồng đọc riêng sau AEC cho ALSA automatic,
