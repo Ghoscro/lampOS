@@ -283,7 +283,7 @@ func TestJevParameterizedDecisions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseJevDecision([]byte(tc.response), candidates)
+			got, err := parseJevDecision([]byte(tc.response), candidates, jevMinFit)
 			if (err != nil) != tc.wantError || got.Parameters["color"] != tc.want || (tc.want == "" && got.Intent != "") {
 				t.Fatalf("got %+v, %v", got, err)
 			}
@@ -293,7 +293,7 @@ func TestJevParameterizedDecisions(t *testing.T) {
 	candidates = append(candidates, Candidate{ID: "dim", Description: "Dim the light"})
 	response := strings.Replace(validJevResponse, `"none":0.04`, `"none":0.02,"color":0.02`, 1)
 	response = strings.Replace(response, `"fit_dim":`, `"fit_color":{"type":"noul","noul":0.1},"arg_color_color":{"choice":"untrusted arbitrary value"},"fit_dim":`, 1)
-	got, err := parseJevDecision([]byte(response), candidates)
+	got, err := parseJevDecision([]byte(response), candidates, jevMinFit)
 	if err != nil || got.Intent != "dim" || len(got.Parameters) != 0 {
 		t.Fatalf("unselected argument changed selection: %+v, %v", got, err)
 	}
@@ -349,7 +349,7 @@ func TestJevParameterCanonicalMultiwordOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := `{"answers":{"intent":{"type":"choice","choice":"track","probabilities":{"track":0.96,"none":0.04}},"fit_track":{"type":"noul","noul":0.99},"arg_track_target":{"type":"choice","choice":"cell phone","probabilities":{"cell phone":0.97,"teddy bear":0.01,"sports ball":0.01,"none":0.01}}}}`
-	got, err := parseJevDecision([]byte(response), candidates)
+	got, err := parseJevDecision([]byte(response), candidates, jevMinFit)
 	if err != nil || got.Parameters["target"] != "cell phone" {
 		t.Fatalf("got %+v, %v", got, err)
 	}

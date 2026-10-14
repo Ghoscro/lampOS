@@ -185,7 +185,11 @@ func (c *jevClient) decide(ctx context.Context, endpoint, apiKey, text string, c
 	if len(data) > jevMaxResponseBytes {
 		return Selection{}, errors.New("jev: response too large")
 	}
-	return parseJevDecision(data, candidates)
+	minFit := jevMinFit
+	if c.harness {
+		minFit = jevHarnessMinFit
+	}
+	return parseJevDecision(data, candidates, minFit)
 }
 
 func validJevEndpoint(endpoint string) bool {
@@ -220,7 +224,16 @@ func validJevCandidateID(id string) bool {
 	return true
 }
 
-func parseJevDecision(data []byte, candidates []Candidate) (Selection, error) {
+const (
+	jevMinFit = 0.95
+	// Harness fit asks whether session evidence establishes ownership, which
+	// Jev scores lower: on the labeled corpus (harness_live_test.go) correct
+	// owners scored 0.74-0.93, so 0.95 abstained on every request. The
+	// probability and margin gates still apply.
+	jevHarnessMinFit = 0.70
+)
+
+func parseJevDecision(data []byte, candidates []Candidate, minFit float64) (Selection, error) {
 	invalid := errors.New("jev: invalid decision")
 	if err := validateJevCandidates(candidates); err != nil {
 		return Selection{}, err
@@ -280,7 +293,7 @@ func parseJevDecision(data []byte, candidates []Candidate) (Selection, error) {
 		reason = "low_probability"
 	case selected-runnerUp < 0.40:
 		reason = "low_margin"
-	case fits[choice.Choice] < 0.95:
+	case fits[choice.Choice] < minFit:
 		reason = "low_fit"
 	}
 	selection := Selection{Intent: choice.Choice}
