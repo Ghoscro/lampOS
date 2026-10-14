@@ -32,6 +32,9 @@ _RATE_LIMIT_BACKOFF_S = 300.0
 
 RESOURCES_DIR = Path(__file__).parent / "resources"
 
+# Set once the "preset reply names none of our classes" warning has been logged.
+_warned_unknown_preset_classes = False
+
 class RemoteFireHazardDetector:
     """HTTP client for the DL backend object detection endpoint."""
 
@@ -107,38 +110,47 @@ class RemoteFireHazardDetector:
 
         return self._assess_hazard(fire_objects, smoke_objects, flammable_objects, safe_objects)
 
-    def _call_api(self, frame: cv2t.MatLike) -> list[dict[str, Any]]:
-        """POST frame to the object detection endpoint."""
-        if time.time() < self._backoff_until:
-            return []
+    def _post(self, body: dict[str, Any]) -> requests.Response | None:
+        """POST one JSON body; None when encryption is required but unavailable.
+
+        Each POST takes its own crypto session, because each encrypted request
+        carries its own key. Network errors propagate to the caller.
+        """
         try:
             self._crypto = self._dl_crypto.http_session()
         except EncryptionUnavailable:
+            return None
+        plain_body = json.dumps(body).encode()
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+
+        data = self._crypto.wrap_http_request(plain_body) if self._crypto is not None else plain_body
+        return requests.post(self._url, data=data, headers=headers, timeout=self._timeout)
+
+    def _call_api(self, frame: cv2t.MatLike) -> list[dict[str, Any]]:
+        """POST frame to the object detection endpoint.
+
+        Sends the server preset when one is configured. A server that rejects
+        the preset (HTTP 400) gets the same frame again with the class list.
+        """
+        if time.time() < self._backoff_until:
             return []
+        preset = config.FIRE_HAZARD_PRESET
         try:
-            plain_body = json.dumps({
-                "image_b64": img2b64(frame),
-                "classes": self._all_classes,
-            }).encode()
-
-            headers: dict[str, str] = {"Content-Type": "application/json"}
-            if self._api_key:
-                headers["X-API-Key"] = self._api_key
-
-            if self._crypto is not None:
-                resp = requests.post(
-                    self._url,
-                    data=self._crypto.wrap_http_request(plain_body),
-                    headers=headers,
-                    timeout=self._timeout,
-                )
+            image_b64 = img2b64(frame)
+            used_preset = bool(preset)
+            if used_preset:
+                resp = self._post({"image_b64": image_b64, "preset": preset})
+                if resp is not None and resp.status_code == 400:
+                    logger.warning("[fire_hazard] preset %s rejected (400), retrying with classes", preset)
+                    used_preset = False
+                    resp = self._post({"image_b64": image_b64, "classes": self._all_classes})
             else:
-                resp = requests.post(
-                    self._url,
-                    data=plain_body,
-                    headers=headers,
-                    timeout=self._timeout,
-                )
+                resp = self._post({"image_b64": image_b64, "classes": self._all_classes})
+            if resp is None:
+                return []
 
             if resp.status_code == 429:
                 self._backoff_until = time.time() + _RATE_LIMIT_BACKOFF_S
@@ -156,9 +168,10 @@ class RemoteFireHazardDetector:
             else:
                 data = resp.json()
 
-            if isinstance(data, dict):
-                return data.get("detections", [])
-            return data
+            detections = data.get("detections", []) if isinstance(data, dict) else data
+            if used_preset:
+                self._check_preset_classes(detections)
+            return detections
 
         except requests.RequestException as e:
             logger.warning("[fire_hazard] request failed: %s", e)
@@ -166,6 +179,21 @@ class RemoteFireHazardDetector:
         except Exception as e:
             logger.exception("[fire_hazard] unexpected error: %s", e)
             return []
+
+    def _check_preset_classes(self, detections: list[dict[str, Any]]) -> None:
+        """Warn once if a preset reply names none of our prompts.
+
+        A server older than the preset ignores the unknown field and answers 200
+        with its default classes, so HAL would silently see no fire.
+        """
+        global _warned_unknown_preset_classes
+        if _warned_unknown_preset_classes or not detections:
+            return
+        known = set(self._all_classes)
+        if any(d.get("class_name", "") in known for d in detections):
+            return
+        _warned_unknown_preset_classes = True
+        logger.warning("[fire_hazard] preset response has no known classes; is the server older than the preset?")
 
     def _assess_hazard(
         self,
