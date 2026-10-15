@@ -106,7 +106,8 @@ của mọi khớp ở 20 Hz (`hal/drivers/motors/overload.py`).
   không phát âm thanh, và chặn lệnh ghi
   goal trong 3 s. Sau đó chạy tiếp vào idle từ tư thế
   đã dừng. Tay vẫn giữ tay đèn sau 1 s trong lúc dừng (`release_after_s`), tức khớp
-  vừa dừng vẫn ở sàn tải/lag đã làm nó dừng hoặc bị đẩy lệch 1° khỏi tư thế đã ghim (`base_pitch`/`elbow_pitch` chỉ theo sàn
+  vừa dừng vẫn ở sàn tải/lag đã làm nó dừng hoặc bị đẩy lệch 1° khỏi tư thế đã ghim (`base_pitch`/`elbow_pitch` theo tải và lag
+  đã học khi giữ đứng yên ở tư thế đó cộng margin của profile, không thì sàn
   `off_playback` hoặc cut-off, vì chúng gánh trọng lượng tay đèn kể cả khi không ai chạm), thì nhả torque như cut-off quá tải. Trên lamp-52e6 các khớp này đạt đỉnh 52 % khi chuyển động tự do, và lấy tay
   chặn `base_yaw` đẩy nó lên 94-100 %. `base_pitch` và `elbow_pitch` gánh trọng lượng
   tay đèn và lên 83-100 % khi chuyển động tự do, nên không có sàn cố định; chúng
@@ -122,7 +123,9 @@ của mọi khớp ở 20 Hz (`hal/drivers/motors/overload.py`).
   sạch của recording (xem [an toàn](../../../../docs/vi/safety_vi.md)). Chỉ số frame được tra là frame
   playback, nên envelope bám theo recording sau khi resample theo giới hạn tốc độ; học
   lại sau khi hiệu chuẩn. Đổi `torque_limit` thì envelope bị bỏ, và recording nào đổi
-  độ dài thì các lần chạy học ngầm của nó bắt đầu lại. Ngoài playback
+  độ dài thì các lần chạy học ngầm của nó bắt đầu lại. Tải giữ theo tư thế được học
+  song song, từ mọi quãng đứng yên (lượt học giữ tư thế cuối mỗi recording 4 s), vào
+  `/var/lib/hal/contact_hold.json`. Ngoài playback
   (gaze, tracking, `/servo/move`, giữ tư thế) dùng sàn `contact.off_playback`:
   `base_pitch` 57 % (elbow chỉ xét lag), lag 9-14° tuỳ khớp; trừ lúc đang chạy một lệnh
   xoay trực tiếp và 0,5 s sau đó (lệnh nhanh chạy trước đà tăng tốc của servo).

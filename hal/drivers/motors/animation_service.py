@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from hal.follower import LeLampFollowerConfig, LeLampFollower
 from hal.presets import EMO_SLEEPY, SERVO_CMD_PLAY, SERVO_CMD_MUSIC_START, SERVO_CMD_MUSIC_STOP, SERVO_IDLE, SERVO_MUSIC_GROOVE
 from hal.drivers.motors.contact_profile import LAG_PREFIX, ContactProfile, PassiveLearner
+from hal.drivers.motors.hold_profile import CHANNELS as HOLD_CHANNELS, WEIGHT_BEARING, HoldLearner
 from hal.drivers.motors.overload import OverloadGuard, load_magnitude
 from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
 
@@ -61,6 +62,9 @@ CONTACT_RELEASE_LAG = 10
 
 # Plays per recording a learn run allows before giving up on a full pass.
 LEARN_ATTEMPTS = 3
+# A learn run holds each recording's end pose this long (s): the contact pause plus the
+# hold learner's settle, so the pose is learned as a stopped arm holds it.
+LEARN_HOLD_S = 4.0
 
 # How often the contact stop and overload cut-off sample Present_Load. A sync_read of
 # five servos takes ~2.5 ms on the Lamp bus, so 20 Hz costs little and keeps the
@@ -106,7 +110,8 @@ class AnimationService:
                  contact_profile: Optional[ContactProfile] = None,
                  contact_off_playback: Optional[Dict[str, int]] = None,
                  on_contact: Optional[Callable[[str, int], None]] = None,
-                 contact_release_s: Optional[float] = None):
+                 contact_release_s: Optional[float] = None,
+                 contact_hold_profile: Optional[ContactProfile] = None):
         self.port = port
         self.lamp_id = lamp_id
         self.fps = fps
@@ -229,6 +234,17 @@ class AnimationService:
         self._contact_release_s = contact_release_s
         self._contact_hold: Optional[OverloadGuard] = None
         self._contact_hold_floors: Dict[str, int] = {}
+        # Learned holding load of base_pitch / elbow_pitch per pose, for that release.
+        self._hold = (
+            HoldLearner(
+                contact_hold_profile, self._hold_defaults(), caps=self._torque_limits,
+                window_s=contact_guard.retry_s, clock=contact_guard._clock,
+            )
+            if contact_hold_profile is not None and contact_guard is not None
+            and contact_release_s is not None else None
+        )
+        # (goals in deg, lags) of this monitor tick's lag read, else None.
+        self._tick_lags: Optional[tuple] = None
         # A direct move in flight, and when the last one ended (contact guard clock).
         self._direct_move = False
         self._direct_move_ended = float("-inf")
@@ -253,6 +269,14 @@ class AnimationService:
             defaults.setdefault(name, floor)
         for joint, cap in self._torque_limits.items():
             defaults.setdefault(joint, cap)
+        return defaults
+
+    def _hold_defaults(self) -> Dict[str, int]:
+        """Each weight-bearing channel's release floor before the hold learned: off_playback, else its cap."""
+        defaults = {name: floor for name, floor in self._contact_off_playback.items() if name in HOLD_CHANNELS}
+        for joint in WEIGHT_BEARING:
+            if joint not in defaults and joint in self._torque_limits:
+                defaults[joint] = self._torque_limits[joint]
         return defaults
 
     @property
@@ -664,8 +688,11 @@ class AnimationService:
                     return
                 elif self._current_recording != self.idle_recording:
                     if not self._music_playing:
-                        if self.hold_s > 0 and self._hold_until == 0.0:
-                            self._hold_until = time.time() + self.hold_s
+                        # A learn run holds each end pose through a contact pause, so
+                        # the hold learner sees that pose still.
+                        hold_s = max(self.hold_s, LEARN_HOLD_S) if self._learning is not None else self.hold_s
+                        if hold_s > 0 and self._hold_until == 0.0:
+                            self._hold_until = time.time() + hold_s
                             return
                         if self._hold_until > 0.0:
                             if time.time() < self._hold_until:
@@ -1182,6 +1209,7 @@ class AnimationService:
                 "recordings": len(self._contact_profile.recordings()),
                 "learning": self._learn_current,
                 "passive_runs": self._passive.runs() if self._passive is not None else {},
+                "hold_cells": self._hold.cells() if self._hold is not None else None,
             },
         }
 
@@ -1209,6 +1237,7 @@ class AnimationService:
         contact = self._contact
         if contact is not None and contact.locked and contact.retry_due():
             self._contact_recover()
+        self._tick_lags = None
         loads = self._read_loads()
         if contact is not None and contact.locked and self._contact_hold is not None and loads:
             samples = dict(loads)
@@ -1225,6 +1254,8 @@ class AnimationService:
             if hit:
                 self._contact_stop(*hit)
                 return
+            if not contact.locked:
+                self._hold_observe(loads)
         tripped = guard.observe(loads)
         if tripped:
             self._overload_cut(*tripped)
@@ -1244,6 +1275,26 @@ class AnimationService:
         self._overload_read_ok = True
         return {motor: load_magnitude(val) for motor, val in raw.items()}
 
+    def _hold_observe(self, loads: Optional[Dict[str, int]]) -> None:
+        """Feed the hold learner while the arm may be still with torque on.
+
+        Reuses this tick's lag read; reads one only where the contact stop did not
+        (a recording's held final pose, no learned envelope).
+        """
+        hold = self._hold
+        if hold is None:
+            return
+        if not loads or not self._running.is_set() or self._direct_move:
+            hold.discard()
+            return
+        if self._tick_lags is None:
+            self._read_lags()
+        if self._tick_lags is None:
+            hold.discard()
+            return
+        goals, lags = self._tick_lags
+        hold.observe(goals, {**loads, **lags}, trusted=self._learning is not None)
+
     def _contact_release(self, joint: str, value: int) -> None:
         """Still held through the contact pause: hand over to the cut-off's torque-off."""
         unit = "deg behind" if joint.startswith(LAG_PREFIX) else "% load"
@@ -1262,6 +1313,8 @@ class AnimationService:
         guard = self._overload
         if self._passive is not None:
             self._passive.discard()
+        if self._hold is not None:
+            self._hold.discard()
         if not logged:
             logger.warning(
                 "[overload] %s load %.1f%% >= %.1f%% for %.1fs — cutting torque, retry in %.0fs",
@@ -1377,10 +1430,12 @@ class AnimationService:
         except Exception as e:
             logger.debug("[contact] lag read failed: %s", e)
             return None
-        return {
+        lags = {
             LAG_PREFIX + motor: int(round(abs(goal[motor] - present[motor]) * 10))
             for motor in goal if motor in present
         }
+        self._tick_lags = (dict(goal), lags)
+        return lags
 
     def _written_goals(self) -> Optional[Dict[str, float]]:
         """Every joint's goal as last written, or None to read the register instead."""
@@ -1435,6 +1490,8 @@ class AnimationService:
                     else:
                         logger.warning("[contact] learn: %s never played through", rec)
             profile.save()
+            if self._hold is not None:
+                self._hold.flush()
             logger.info("[contact] learn run saved %s", profile.path)
         except Exception as e:
             logger.warning("[contact] learn run failed: %s", e)
@@ -1480,8 +1537,11 @@ class AnimationService:
         self._halt.set()
         if self._passive is not None:
             self._passive.discard()
+        if self._hold is not None:
+            self._hold.discard()
         # Pin the pose and block goal writes under one lock hold, so no playback or
         # tracker frame lands in between and drives back into the obstacle.
+        current: Optional[Dict[str, float]] = None
         with self.bus_lock:
             try:
                 current = _motor_positions_from_bus(self.robot)
@@ -1500,9 +1560,15 @@ class AnimationService:
             # weight-bearing joint (no fixed floor: base_pitch, elbow_pitch) keeps a
             # gravity load, and some sag, that depend on the pose it stopped in, not the
             # one the envelope learned: untouched, lamp-a0ae's elbow_pitch held 33.4 %
-            # after a 22.7 % stop and went limp even with a 10 % margin. Those still
-            # release on their off_playback floor or the cut-off.
+            # after a 22.7 % stop and went limp even with a 10 % margin. Those release
+            # on what they learned to hold still in this pose (HoldLearner), else on
+            # their off_playback floor or the cut-off.
             self._contact_hold_floors = dict(self._contact_off_playback)
+            if self._hold is not None and current:
+                pose = {key.removesuffix(".pos"): value for key, value in current.items()}
+                for name, learned in self._hold.floors(pose).items():
+                    known = self._contact_hold_floors.get(name)
+                    self._contact_hold_floors[name] = learned if known is None else min(known, learned)
             floor = self._contact.last_floor
             motor = joint[len(LAG_PREFIX):] if joint.startswith(LAG_PREFIX) else joint
             fixed = self._contact.threshold_for(joint)

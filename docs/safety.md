@@ -439,8 +439,21 @@ Six conditions are enforced today; setup-incomplete is reserved.
       `elbow_pitch`) never releases on its learned floor: pinned, it keeps a gravity load
       (and some sag) that depends on the pose it stopped in, not the one the envelope learned. Untouched,
       lamp-a0ae's `elbow_pitch` stopped at 38.0 % over a 22.7 % floor and then held 33.4 %,
-      so even a 10 % margin let it go limp. Those joints release on their `off_playback`
-      floor or the cut-off only. Surfaced at
+      so even a 10 % margin let it go limp. They release on what they learned to **hold
+      still in that pose** instead (`HoldLearner`, `hal/drivers/motors/hold_profile.py`):
+      every spell in which all goals stay still (within 0.5°) for the 3 s pause with
+      torque on, learn run or not, is sampled the way a pause sees a pinned arm, past a
+      0.5 s settle for the last move's lag, for `base_pitch` / `elbow_pitch` load and lag.
+      The peaks are kept per pose cell of 5° x 5° (`base_pitch`, `elbow_pitch`) and
+      updated like the passive envelope (2 spells, the first falling 25 % of the gap from
+      the fixed floor per spell, a heavier one rising at once; a learn run's spells,
+      held 4 s at each recording's end pose, set the cell outright). In a pause these
+      joints release at the learned peak (the cell and its ±1 neighbours) plus the profile
+      margins, and only where that is under their `off_playback` floor (and, for a
+      capped load, under the cap): an unlearned pose, or a cell a hand raised, keeps the
+      `off_playback` floor or the cut-off as before. Saved at most once a minute to
+      `/var/lib/hal/contact_hold.json` (`HAL_CONTACT_HOLD_PATH`), dropped like the
+      envelope when `torque_limit` changes. Surfaced at
       `GET /health.servo_overload.contact` (`active`, `resume_in_s`, `trips`,
       `last_trip`, thresholds). Lamp's floors come from lamp-52e6 (2026-10-09): over
       19 recordings the free-motion peaks were `base_yaw` 46 %, `wrist_roll` 52 %,
@@ -519,8 +532,8 @@ Six conditions are enforced today; setup-incomplete is reserved.
       again (an envelope learned at 60 % tripped lamp-c0a4's idle `base_pitch` about
       300 times in 25 min at 70 %).
       `GET /health.servo_overload.contact.profile` shows `margin`, how many recordings
-      are learned, which one a learn run is on and `passive_runs` (clean runs held per
-      recording).
+      are learned, which one a learn run is on, `passive_runs` (clean runs held per
+      recording) and `hold_cells` (pose cells with a learned hold).
       **Limits:** nothing is seen before the touch, and a light object the arm can
       simply push, such as a cup or a photo frame, may never load a joint enough to trip.
 - [x] **Servo torque cap → a softer arm.** An optional `torque_limit` map

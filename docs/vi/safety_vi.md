@@ -419,8 +419,20 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       Khớp gánh trọng lượng (không có sàn cố định: `base_pitch`, `elbow_pitch`) không bao
       giờ nhả theo sàn đã học: khi ghim, nó vẫn chịu tải trọng lực (và bị võng) tuỳ tư thế lúc dừng,
       không phải tư thế đường bao đã học. Không ai chạm, `elbow_pitch` của lamp-a0ae dừng ở
-      38.0 % trên sàn 22.7 % rồi giữ 33.4 %, nên cộng 10 % vẫn rũ. Các khớp đó chỉ nhả theo
-      sàn `off_playback` hoặc cut-off. Lộ ra ở `GET /health.servo_overload.contact` (`active`,
+      38.0 % trên sàn 22.7 % rồi giữ 33.4 %, nên cộng 10 % vẫn rũ. Thay vào đó chúng nhả
+      theo tải **giữ đứng yên ở đúng tư thế đó** đã học (`HoldLearner`,
+      `hal/drivers/motors/hold_profile.py`): mỗi quãng mọi goal đứng yên (trong 0,5°) đủ
+      3 s pause với torque bật, có lượt học hay không, được lấy mẫu như pause thấy tay đèn
+      bị ghim, bỏ 0,5 s đầu cho lag của lần di chuyển trước tắt, cho tải và lag của
+      `base_pitch` / `elbow_pitch`. Đỉnh được giữ theo ô tư thế 5° x 5° (`base_pitch`,
+      `elbow_pitch`) và cập nhật như envelope học ngầm (2 quãng, lần đầu giảm 25 % khoảng
+      cách từ sàn cố định mỗi quãng, nặng hơn thì tăng ngay; quãng của lượt học, giữ 4 s
+      ở tư thế cuối mỗi recording, đặt thẳng giá trị ô). Trong pause các khớp này nhả ở
+      đỉnh đã học (ô đó và các ô kề ±1) cộng margin của profile, và chỉ khi mức đó dưới
+      sàn `off_playback` (với tải bị giới hạn thì dưới trần): tư thế chưa học, hoặc ô bị
+      tay đẩy lên, vẫn theo sàn `off_playback` hoặc cut-off như trước. Lưu tối đa mỗi phút
+      một lần vào `/var/lib/hal/contact_hold.json` (`HAL_CONTACT_HOLD_PATH`), bị bỏ như
+      envelope khi `torque_limit` đổi. Lộ ra ở `GET /health.servo_overload.contact` (`active`,
       `resume_in_s`, `trips`, `last_trip`, các ngưỡng). Sàn của Lamp lấy từ lamp-52e6
       (2026-10-09): qua 19 recording, đỉnh chuyển động tự do là `base_yaw` 46 %,
       `wrist_roll` 52 %, `wrist_pitch` 43 %, còn lấy tay chặn `base_yaw` đẩy nó lên
@@ -497,8 +509,8 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       (envelope học ở 60 % làm idle của lamp-c0a4 trip `base_pitch` khoảng 300 lần trong
       25 phút ở 70 %).
       `GET /health.servo_overload.contact.profile` hiện `margin`, số recording đã học,
-      recording mà lượt học đang chạy và `passive_runs` (số lần chạy sạch đang giữ của
-      mỗi recording).
+      recording mà lượt học đang chạy, `passive_runs` (số lần chạy sạch đang giữ của
+      mỗi recording) và `hold_cells` (số ô tư thế đã học tải giữ).
       **Giới hạn:** không thấy gì trước khi chạm, và một vật
       nhẹ mà tay đèn đẩy đi được, như cái cốc hay khung ảnh, có thể không bao giờ làm khớp nào đủ tải để
       trip.
