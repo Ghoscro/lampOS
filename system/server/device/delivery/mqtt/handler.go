@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -37,6 +38,12 @@ type DeviceMQTTHandler struct {
 	// connectorWriter is the data-driven writer for the connector.set.<code>
 	// / connector.remove.<code> flow and the refresh loop.
 	connectorWriter *connectorWriter
+	// shopifyHTTP is the client for the one Shopify credential check the local
+	// Settings page makes; nil means the default (short timeout, no redirects).
+	shopifyHTTP *http.Client
+	// publishConnectorResult, when set, replaces publishDataResult for the local
+	// connector pages so tests don't need a broker.
+	publishConnectorResult func(kind, status, errMsg string, data interface{}) error
 	// specialConnectorWriters holds bespoke writers for connectors that can't
 	// be expressed as a simple http mcp_url entry — e.g. figma-api, a local
 	// stdio MCP server that drops a Node wrapper on disk.

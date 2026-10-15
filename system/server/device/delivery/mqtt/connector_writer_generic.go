@@ -221,6 +221,7 @@ func (w *connectorWriter) RefreshableEntries() []ConnectorRefreshTarget {
 				Connector:    code,
 				RefreshToken: entry.RefreshToken,
 				ExpiresAt:    entry.ExpiresAt,
+				Vars:         refreshVarsFromCredentials(code, entry.Credentials),
 			})
 		}
 	}

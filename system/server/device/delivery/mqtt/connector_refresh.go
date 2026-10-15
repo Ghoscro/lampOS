@@ -75,7 +75,7 @@ func (h *DeviceMQTTHandler) refreshExpiringConnectors(ctx context.Context) {
 			if !connectorNeedsRefresh(target, now, connectorRefreshSkew) {
 				continue
 			}
-			res, err := h.requestConnectorTokenRefresh(ctx, target.Connector, target.RefreshToken)
+			res, err := h.requestConnectorTokenRefresh(ctx, target.Connector, target.RefreshToken, target.Vars)
 			if err != nil {
 				slog.Error("connector-refresh: refresh failed", "component", "mqtt", "connector", target.Connector, "error", err)
 				continue
@@ -144,6 +144,36 @@ func (h *DeviceMQTTHandler) loadRefreshedCreds(w ConnectorWriter, connector stri
 	}, true, nil
 }
 
+// credentialConnectorVars is the key under which the cloud stores a connector's
+// per-connection values (a JSON object of string values, for example the store
+// domain) inside the credentials map it relays with connector.set.
+const credentialConnectorVars = "connector_vars"
+
+// refreshVarsFromCredentials parses the stored per-connection values to send
+// back on refresh. It returns nil when there are none. An unparseable value is
+// logged (connector name only, never the value) and treated as absent, so a
+// damaged entry still refreshes like a connector with static endpoints.
+func refreshVarsFromCredentials(connector string, creds map[string]string) map[string]string {
+	raw := strings.TrimSpace(creds[credentialConnectorVars])
+	if raw == "" {
+		return nil
+	}
+	var vars map[string]string
+	if err := json.Unmarshal([]byte(raw), &vars); err != nil {
+		slog.Warn("connector-refresh: ignoring unparseable connector_vars", "component", "mqtt", "connector", connector)
+		return nil
+	}
+	for k, v := range vars {
+		if strings.TrimSpace(k) == "" || v == "" {
+			delete(vars, k)
+		}
+	}
+	if len(vars) == 0 {
+		return nil
+	}
+	return vars
+}
+
 func firstNonEmpty(a, b string) string {
 	if a != "" {
 		return a
@@ -153,7 +183,7 @@ func firstNonEmpty(a, b string) string {
 
 // requestConnectorTokenRefresh POSTs the refresh_token to the backend and
 // returns the fresh token.
-func (h *DeviceMQTTHandler) requestConnectorTokenRefresh(ctx context.Context, connector, refreshToken string) (connectorRefreshResult, error) {
+func (h *DeviceMQTTHandler) requestConnectorTokenRefresh(ctx context.Context, connector, refreshToken string, vars map[string]string) (connectorRefreshResult, error) {
 	var out connectorRefreshResult
 
 	base := strings.TrimRight(strings.TrimSpace(h.config.LLMBaseURL), "/")
@@ -162,7 +192,11 @@ func (h *DeviceMQTTHandler) requestConnectorTokenRefresh(ctx context.Context, co
 	}
 	base = strings.TrimSuffix(base, "/v1")
 
-	payload, err := json.Marshal(map[string]string{"connector": connector, "refresh_token": refreshToken})
+	body := map[string]any{"connector": connector, "refresh_token": refreshToken}
+	if len(vars) > 0 {
+		body["vars"] = vars
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return out, fmt.Errorf("marshal request: %w", err)
 	}
@@ -187,14 +221,14 @@ func (h *DeviceMQTTHandler) requestConnectorTokenRefresh(ctx context.Context, co
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return out, fmt.Errorf("read body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return out, fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return out, fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
+	if err := json.Unmarshal(respBody, &out); err != nil {
 		return out, fmt.Errorf("decode response: %w", err)
 	}
 	if out.AccessToken == "" {

@@ -585,6 +585,36 @@ export async function setConnectorPAT(body: {
   });
 }
 
+/** Read-side of the Shopify connection: the store and client ID, and whether a secret is saved. Never the secret or a token. */
+export interface ShopifyInfo {
+  connector: string;
+  connected: boolean;
+  shop?: string;
+  client_id?: string;
+  has_secret: boolean;
+  scopes?: string[];
+  /** Unix seconds when the credentials were saved on this device. */
+  obtained_at?: number;
+}
+
+/** GET /api/device/connectors/shopify */
+export async function getShopify(): Promise<ShopifyInfo> {
+  return apiRequest<ShopifyInfo>(`${API_BASE}/api/device/connectors/shopify`);
+}
+
+/** PUT /api/device/connectors/shopify — the device checks the credentials with Shopify once, then saves them. */
+export async function setShopify(body: {
+  shop: string;
+  client_id: string;
+  client_secret: string;
+}): Promise<ShopifyInfo> {
+  return apiRequest<ShopifyInfo>(`${API_BASE}/api/device/connectors/shopify`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** DELETE /api/device/connectors/:code — drops the on-disk entry (and any mcp.servers.<code> side-effect through the writer). */
 export async function removeConnector(code: string): Promise<{ connector: string; removed: boolean }> {
   return apiRequest(`${API_BASE}/api/device/connectors/${encodeURIComponent(code)}`, {
