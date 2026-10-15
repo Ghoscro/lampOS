@@ -162,7 +162,8 @@ def test_detector_reports_outcome(monkeypatch):
         ([_Resp(429)], "rate_limited", False),
     ]
     for responses, outcome, fallback in cases:
-        monkeypatch.setattr(fire_hazard.requests, "post", _FakePost(*responses))
+        fake = _FakePost(*responses)
+        monkeypatch.setattr(fire_hazard.requests.Session, "post", lambda self, *a, fake=fake, **kw: fake(*a, **kw))
         det = _detector()
         det.detect(FRAME)
         assert (det.last_outcome, det.last_preset_fallback) == (outcome, fallback), responses

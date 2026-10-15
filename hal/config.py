@@ -329,6 +329,9 @@ FIRE_HAZARD_DETECTOR = os.environ.get("HAL_FIRE_HAZARD_DETECTOR", "owlv2")
 FIRE_HAZARD_ENDPOINT = os.environ.get("DL_FIRE_HAZARD_ENDPOINT", f"/detect/{FIRE_HAZARD_DETECTOR}")
 FIRE_HAZARD_BACKEND_URL: str = DL_BACKEND_URL.rstrip("/") + "/" + FIRE_HAZARD_ENDPOINT.strip("/") if DL_BACKEND_URL else ""
 FIRE_HAZARD_API_TIMEOUT_S = float(os.environ.get("HAL_FIRE_HAZARD_API_TIMEOUT_S", "15.0"))
+# JPEG quality of the frame sent to OWLv2. 80 roughly halves the upload against
+# OpenCV's default 95, with no decision change on the 16-image test (#612).
+FIRE_HAZARD_JPEG_QUALITY = int(os.environ.get("HAL_FIRE_HAZARD_JPEG_QUALITY", "80"))
 # Server-side prompt preset sent instead of the 46 class strings; empty = send classes.
 FIRE_HAZARD_PRESET = os.environ.get("HAL_FIRE_HAZARD_PRESET", "fire_hazard_v1")
 # On-lamp gate: a fire/smoke score at or above this sends the frame to OWLv2.

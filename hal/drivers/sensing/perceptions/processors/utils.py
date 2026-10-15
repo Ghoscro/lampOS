@@ -8,9 +8,10 @@ import numpy as np
 import numpy.typing as npt
 
 
-def img2b64(frame: cv2t.MatLike) -> str:
-    """Encode a BGR frame to a base64 JPEG string."""
-    _, buf = cv2.imencode(".jpg", frame)
+def img2b64(frame: cv2t.MatLike, quality: int | None = None) -> str:
+    """Encode a BGR frame to a base64 JPEG string; quality None = OpenCV default (95)."""
+    params = [cv2.IMWRITE_JPEG_QUALITY, int(quality)] if quality is not None else []
+    _, buf = cv2.imencode(".jpg", frame, params)
     return base64.b64encode(buf.tobytes()).decode()
 
 
