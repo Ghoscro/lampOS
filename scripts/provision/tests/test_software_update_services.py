@@ -97,6 +97,35 @@ class ServiceOTATests(unittest.TestCase):
         self.assertEqual(self.states['hal'], 'active')
         self.assertEqual(self.states['os-server'], 'active')
 
+    def test_cleanup_contract_and_legacy_unit_upgrade(self):
+        self.install()
+        unit = self.m.UNITS / 'lamp-os.service'
+        unit.write_text(self.m.unit_text('lamp-os', cleanup=False))
+        self.install(version='0.2.0', activate=False)
+        self.assertIn('ExecStopPost=', unit.read_text())
+        self.assertIn('/current/SERVICE_CLEANUP || exec ', unit.read_text())
+        self.assertIn('/current/bin/service cleanup', unit.read_text())
+        self.assertIn('TimeoutStopSec=60', unit.read_text())
+
+    def test_failed_cleanup_is_not_treated_as_successful_stop(self):
+        self.install()
+        release = Path(self.m.load()['components']['lamp-os']['release'])
+        (release / 'SERVICE_CLEANUP').write_text('1')
+        with patch.object(self.m, 'run', side_effect=RuntimeError('cleanup failed')) as run:
+            with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                self.m.stop('lamp-os')
+            self.assertEqual(run.call_args.args[1], 'cleanup')
+            self.assertEqual(run.call_args.kwargs['env']['AUTONOMOUS_SERVICE_NAME'], 'lamp-os')
+        self.assertNotEqual(self.states['hal'], 'active')
+
+    def test_invalid_cleanup_contract_rejected_before_stopping_legacy(self):
+        entry = dict(service='lamp-os', replaces=['hal', 'os-server'], version='0.1.0')
+        archive = self.package(extra=[('SERVICE_CLEANUP', 'unsupported')])
+        with self.assertRaisesRegex(RuntimeError, 'cleanup contract'):
+            self.m.install('lamp-os', entry, str(archive), True)
+        self.assert_legacy()
+        self.assertEqual(self.events, [])
+
     def test_promoted_activation_requires_actual_device_and_floor(self):
         patcher = patch.dict(os.environ, {'DEVICE_TYPE': ' lamp '})
         patcher.start()
