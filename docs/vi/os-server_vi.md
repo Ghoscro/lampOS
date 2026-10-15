@@ -203,7 +203,8 @@ SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem [cảm biến môi trư�
 | POST | `/api/device/fo/connect/finish` | Cần admin auth: body `{callback_url}`, URL `http://localhost:5000/oauth/fo/callback?code=…` mà trình duyệt nhảy tới (trang không tải được; Wajo chỉ nhận redirect https hoặc loopback). Đổi code lấy token, lưu vào `fo_auth`, thêm MCP tool `fo` trỏ tới `/api/fo-mcp`. Nếu đã có `fo` (Reconnect) thì chỉ thay token: MCP entry không bị ghi lại nên runtime không restart |
 | ANY | `/api/fo-mcp` | Proxy local mà agent gọi để dùng Fo. Bảo vệ bằng header `X-Fo-Proxy-Key` (nằm trong MCP entry `tool_fo`), không dùng admin auth. Gắn bearer token Wajo còn hạn, refresh khi còn dưới 5 phút và lưu refresh token mới (Wajo xoay vòng), nên MCP entry không bao giờ bị ghi lại và runtime không restart khi refresh |
 | POST | `/api/device/connectors/pat` | Cần admin auth: lưu connector dạng credential tĩnh (PAT) qua cùng writer với MQTT `connector.set.<code>` |
-| GET / DELETE | `/api/device/connectors/:code` | Cần admin auth: trạng thái kết nối + field định danh không bí mật / xoá connector |
+| GET / DELETE | `/api/device/connectors/:code` | Cần admin auth: trạng thái kết nối + field định danh không bí mật (các key credential chứa bí mật như client secret hoặc token không bao giờ được trả về) / xoá connector |
+| GET / PUT / DELETE | `/api/device/connectors/shopify` | Cần admin auth: kết nối Shopify, liên kết bằng app Shopify riêng của khách hàng. GET trả `{connected, shop, client_id, has_secret, scopes, obtained_at}` (không bao giờ trả secret hay token). PUT nhận `{shop, client_id, client_secret}`, chuẩn hoá domain cửa hàng về `<handle>.myshopify.com`, kiểm tra một lần bằng request lấy token (client-credentials) chỉ gửi tới đúng host cửa hàng đó (không theo redirect, timeout ngắn, giới hạn response 64 KB), rồi lưu qua cùng writer với MQTT `connector.set.shopify` và báo trạng thái đã kết nối lên cloud (không gửi secret). Kiểm tra bị từ chối trả 400, không kết nối được cửa hàng trả 502. DELETE xoá entry và token cache của skill helper (`shopify.token.json`) |
 
 ### Device Timezone (Múi giờ)
 
@@ -1047,6 +1048,26 @@ từng record.
   basic auth và không có spool: khi collector chậm/không hoạt động và queue đầy, record
   mới bị drop (có stderr notice rate-limit); log console và rotating file cục bộ vẫn
   tiếp tục. Khi shutdown, worker flush record trong queue tối đa năm giây.
+- **Dữ liệu người dùng ở lại trên thiết bị (GELF mặc định chặn).** Lời gọi log viết
+  như bình thường, console và file cục bộ nhận đầy đủ mọi record; chỉ bản gửi GELF
+  được lọc, ngay trong handler:
+  - Số, boolean, duration, time và lỗi được gửi. Bot token Telegram và query string
+    của URL trong text lỗi bị thay (`<redacted-token>`, `?<redacted>`).
+  - Chuỗi chỉ được gửi khi nằm dưới key kỹ thuật trong allowlist (`gelfSafeKeys` ở
+    `system/lib/logger/private.go`, `SAFE_KEYS` ở `hal/log_redact.py`): id, enum,
+    provider, model, version, cấu hình phần cứng và mạng. Mọi chuỗi khác thành
+    `<redacted N chars>`.
+  - Go: key là key của attribute `slog`, còn message `slog` được gửi nguyên văn
+    (test chặn message được dựng bằng lời gọi format). Dòng `log` chuẩn đến nơi đã
+    được format sẵn, nên chỉ tag `[component]` được gửi.
+  - HAL: handler đọc lời gọi log từ file source (HAL chạy từ source) để tách chữ cố
+    định và giá trị. Chữ cố định được gửi; mỗi giá trị của template `%`, f-string
+    hay chuỗi `+` được xét theo tên biểu thức truyền vào (`self.model`, `e`), hoặc
+    với biểu thức không có tên thì theo từ đứng trước (`provider=%s`). Message mà
+    source không cho thấy là literal sẽ thành `<redacted N chars>`.
+  - `logger.Private(...)` (Go) hoặc `private(...)` (HAL) che giá trị kể cả khi nằm
+    dưới key trong allowlist. Không bao giờ thêm vào allowlist một key có thể chứa
+    lời người dùng nói, danh tính của họ hay những gì thiết bị quan sát về họ.
 
 ## Local Intent Matching
 

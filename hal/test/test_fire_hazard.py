@@ -411,6 +411,136 @@ def test_assess_fire_and_smoke():
     assert _assess(fire=[_BOX], smoke=[_BOX]) == ["smoke", "unsure_fire"]
 
 
+# --- flame words count as fire, not as a safe container (#717) -------------------
+
+BONFIRE = "a single bonfire"
+CAMPFIRE = "a single campfire"
+TORCH = "a single torch"
+COUCH = "a single couch"
+FIRE_BOWL = "a single fire bowl"
+
+
+def _detect_types(post, dets) -> list[str]:
+    post.responses = [_Resp(200, {"detections": dets})]
+    return sorted(h.type.value for h in _detector().detect(FRAME))
+
+
+def test_flame_words_are_fire_classes():
+    det = _detector()
+    for name in (BONFIRE, CAMPFIRE, TORCH):
+        assert name in det._fire_set
+        assert name not in det._safe_set
+
+
+@pytest.mark.parametrize("name", [BONFIRE, CAMPFIRE, TORCH])
+def test_flame_word_alone_is_unsure_fire(post, name):
+    assert _detect_types(post, [_det(name)]) == ["unsure_fire"]
+
+
+def test_bonfire_on_couch_is_hazard(post):
+    # fire-3.jpg (sofa on fire): OWLv2 boxes, 640x480.
+    dets = [_det(BONFIRE, (413.1, 207.8, 146.9, 271.3), 0.67), _det(COUCH, (320.0, 312.8, 382.5, 285.6), 0.68)]
+    assert _detect_types(post, dets) == ["hazard_fire"]
+
+
+def test_torch_on_couch_is_hazard(post):
+    dets = [_det(TORCH, (300, 300, 60, 120)), _det(COUCH, (320, 320, 380, 280))]
+    assert _detect_types(post, dets) == ["hazard_fire"]
+
+
+def test_bonfire_in_fire_bowl_is_safe(post):
+    # fire-2.jpg (garden fire bowl): bonfire above the rim, bowl, wooden furniture to the left.
+    dets = [
+        _det(BONFIRE, (303.4, 265.3, 124.4, 73.4), 0.61),
+        _det(FIRE_BOWL, (308.1, 311.9, 297.5, 78.1), 0.87),
+        _det(FLAMMABLE, (132.5, 280.2, 263.1, 61.3), 0.43),
+    ]
+    assert _detect_types(post, dets) == ["safe_fire"]
+
+
+def test_flame_inside_bonfire_is_not_safe(post):
+    # Dataset case: a flame box inside a bonfire box used to excuse itself as safe_fire.
+    dets = [_det(FIRE, (300, 260, 60, 80), 0.64), _det(BONFIRE, (300, 250, 200, 160), 0.33)]
+    assert "safe_fire" not in _detect_types(post, dets)
+
+
+# --- containment: how much of the fire sits inside the container (#717) ----------
+
+CANDLE = "a single candle"
+BLANKET = "a single blanket"
+FIREPLACE = "a single fireplace"
+
+
+def test_assess_small_safe_box_inside_big_fire_does_not_excuse():
+    # A candle box on one flame column of a big fire: shared ÷ candle = 1.0, shared ÷ fire ≈ 0.02.
+    assert _assess(fire=[(0.5, 0.5, 0.4, 0.6)], safe=[(0.4, 0.7, 0.05, 0.1)]) == ["unsure_fire"]
+
+
+def test_assess_fire_fully_inside_container_is_safe():
+    assert _assess(fire=[(0.5, 0.4, 0.2, 0.2)], safe=[(0.5, 0.5, 0.4, 0.4)]) == ["safe_fire"]
+
+
+def test_candles_inside_room_fire_do_not_excuse_it(post):
+    # s072 (room fire next to a blanket) without the frame-sized fireplace box:
+    # two candle boxes on the flame columns sit inside the bonfire box.
+    dets = [
+        _det(BONFIRE, (117.0, 236.0, 176.0, 364.0), 0.59),
+        _det(CANDLE, (57.5, 372.0, 47.0, 110.0), 0.39),
+        _det(CANDLE, (101.5, 382.0, 47.0, 120.0), 0.38),
+        _det(BLANKET, (474.0, 340.0, 314.0, 278.0), 0.52),
+    ]
+    assert _detect_types(post, dets) == ["unsure_fire"]
+
+
+def test_frame_sized_fireplace_holding_couch_is_ignored(post):
+    # s052 (room flashover): OWLv2 calls the whole doorway view a fireplace; it holds a couch.
+    dets = [
+        _det(BONFIRE, (295.0, 267.0, 422.0, 232.0), 0.34),
+        _det(FIREPLACE, (315.0, 235.5, 624.0, 469.0), 0.51),
+        _det(COUCH, (150.5, 366.5, 131.0, 165.0), 0.55),
+    ]
+    assert _detect_types(post, dets) == ["hazard_fire"]
+
+
+def test_frame_sized_fireplace_and_candles_room_fire(post):
+    # s072 full detections: frame-sized fireplace holding a blanket, plus candle boxes on the flames.
+    dets = [
+        _det(BONFIRE, (117.0, 236.0, 176.0, 364.0), 0.59),
+        _det(FIREPLACE, (316.5, 239.0, 629.0, 472.0), 0.44),
+        _det(CANDLE, (57.5, 372.0, 47.0, 110.0), 0.39),
+        _det(CANDLE, (101.5, 382.0, 47.0, 120.0), 0.38),
+        _det(BLANKET, (474.0, 340.0, 314.0, 278.0), 0.52),
+    ]
+    assert _detect_types(post, dets) == ["unsure_fire"]
+
+
+def test_assess_container_with_rug_partly_inside_stays_safe():
+    # Real fireplace with a rug in front: ~17 % of the rug is inside the fireplace box.
+    assert _assess(
+        fire=[(0.5, 0.4, 0.2, 0.2)],
+        safe=[(0.5, 0.45, 0.4, 0.4)],
+        flammable=[(0.5, 0.7, 0.6, 0.2)],
+    ) == ["safe_fire"]
+
+
+def test_assess_small_cushion_on_hearth_keeps_fireplace():
+    # A cushion fully inside the fireplace box but ~3 % of its area is an object on the hearth,
+    # not a sign that the "fireplace" is a whole room.
+    assert _assess(
+        fire=[(0.5, 0.4, 0.2, 0.2)],
+        safe=[(0.5, 0.45, 0.4, 0.4)],
+        flammable=[(0.6, 0.6, 0.08, 0.06)],
+    ) == ["safe_fire"]
+
+
+def test_assess_zero_area_flammable_does_not_crash():
+    assert _assess(
+        fire=[(0.5, 0.4, 0.2, 0.2)],
+        safe=[(0.5, 0.45, 0.4, 0.4)],
+        flammable=[(0.5, 0.45, 0.0, 0.0)],
+    ) == ["safe_fire"]
+
+
 def _always_owlv2(*results):
     return _perception(_FakeGate(GateVerdict.UNAVAILABLE), _FakeDetector(*results))
 

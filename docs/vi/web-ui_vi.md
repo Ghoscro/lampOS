@@ -564,6 +564,15 @@ Overview chia thành ba vùng luôn hiển thị: **System health** (Agent, Netw
 > `acknowledge`; khi card hẹp, pill cloud sẽ xuống hàng dưới thay vì đè lên
 > trạng thái hiện tại.
 
+### Connectors (Settings → Connectors)
+
+Các tài khoản bên thứ ba mà robot có thể dùng được gom trong **Settings → Connectors**, cạnh các mục Settings khác. Không có nút Save Changes chung; mỗi trang tự lưu kết nối của nó.
+
+- **Facebook** — Page ID và Page Access Token, lưu qua `POST /api/device/connectors/pat`.
+- **Shopify** — cửa hàng được liên kết bằng **app Shopify riêng của khách hàng**: trang hỏi **Store domain**, **Client ID** và **Client secret** của app (ẩn, có nút hiện/ẩn). Domain được làm sạch khi gửi (cắt khoảng trắng, chuyển chữ thường, bỏ `https://…` hoặc đường dẫn dán kèm, tự thêm `.myshopify.com` nếu chỉ nhập handle) và thiết bị kiểm tra cả ba giá trị với Shopify một lần trước khi lưu (`PUT /api/device/connectors/shopify`). Sau đó trang hiển thị cửa hàng đã kết nối, kèm **Reconnect** và **Disconnect**. Secret không bao giờ hiển thị lại và API không bao giờ trả về. Dưới form có hướng dẫn thu gọn được **How to create your Shopify app** (sáu bước và phần xử lý sự cố), cùng nội dung với form kết nối trên autonomous.ai. Token có hiệu lực 24 giờ và thiết bị tự gia hạn, không cần làm mới thủ công.
+
+Trang lưu credential trên thiết bị và chỉ báo trạng thái đã kết nối lên tài khoản, nên dòng quyền riêng tư ghi "Saved on this device. Only the connected status is shared with your account."
+
 ### Khả năng đọc của Settings
 
 Dropdown Settings dùng menu Radix cùng theme, mục chọn màu amber, tự đặt vị trí theo viewport, có cuộn, điều hướng bàn phím và đóng bằng Escape. Các lựa chọn Auto/default có giá trị rỗng vẫn chọn được. General giữ control hiện có.

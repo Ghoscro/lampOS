@@ -11,6 +11,8 @@ import time
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlparse
 
+from hal.log_redact import gelf_record, scrub_secrets
+
 GELF_POOL_MAXSIZE = 32
 
 # Spool for records that cannot ship yet — mirrors system/lib/logger/spool.go.
@@ -247,7 +249,9 @@ class GELFHandler(logging.Handler):
             msg = {
                 "version": "1.1",
                 "host": self._host,
-                "short_message": self.format(record),
+                # Default-deny: literal text, numbers, errors and SAFE_KEYS values
+                # ship; everything else is redacted (hal/log_redact.py).
+                "short_message": scrub_secrets(self.format(gelf_record(record))),
                 "timestamp": record.created,
                 "level": _LEVEL_MAP.get(record.levelno, 6),
                 "_service_name": self._service_name,

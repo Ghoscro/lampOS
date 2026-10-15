@@ -210,7 +210,8 @@ for defaults, validation, payloads and use cases.
 | POST | `/api/device/fo/connect/finish` | Admin-gated: body `{callback_url}`, the `http://localhost:5000/oauth/fo/callback?code=…` URL the browser landed on (it fails to load; Wajo only accepts https or loopback redirects). Exchanges the code, stores tokens in `fo_auth`, and adds MCP tool `fo` pointing at `/api/fo-mcp`. When `fo` already exists (Reconnect) it only replaces the tokens: the MCP entry is not rewritten, so the runtime does not restart |
 | ANY | `/api/fo-mcp` | Local proxy the agent calls for Fo. Guarded by the `X-Fo-Proxy-Key` header (in the `tool_fo` MCP entry), not admin auth. Adds a live Wajo bearer token, refreshing it within 5 min of expiry and storing the rotated refresh token, so the MCP entry is never rewritten and the runtime never restarts on refresh |
 | POST | `/api/device/connectors/pat` | Admin-gated: save a static-credential (PAT) connector through the same writer as MQTT `connector.set.<code>` |
-| GET / DELETE | `/api/device/connectors/:code` | Admin-gated: connected state + non-secret identity fields / remove the connector |
+| GET / DELETE | `/api/device/connectors/:code` | Admin-gated: connected state + non-secret identity fields (credential keys that hold a secret, such as a client secret or token, are never returned) / remove the connector |
+| GET / PUT / DELETE | `/api/device/connectors/shopify` | Admin-gated: the Shopify connection, linked with the customer's own Shopify app. GET returns `{connected, shop, client_id, has_secret, scopes, obtained_at}` (never the secret or a token). PUT takes `{shop, client_id, client_secret}`, normalizes the store domain to `<handle>.myshopify.com`, checks the values once with a client-credentials token request sent only to that store host (no redirects followed, short timeout, 64 KB response cap), then saves them through the same writer as MQTT `connector.set.shopify` and reports the connected status upstream (never the secret). A rejected check returns 400, an unreachable store 502. DELETE removes the entry and the skill helper's cached token (`shopify.token.json`) |
 
 ### Device Timezone
 
@@ -1069,6 +1070,28 @@ path or creates a goroutine per record.
   and the queue is full, newly produced records are dropped (with rate-limited
   stderr notices) while console and local rotating-file logging continue. On
   shutdown it flushes queued records for up to five seconds.
+- **User data stays on the device (GELF is default-deny).** Log calls are
+  written as usual and the console and the local file get every record in full;
+  only the GELF copy is filtered, inside the handler:
+  - Numbers, booleans, durations, times and errors ship. Telegram bot tokens
+    and URL query strings in error text are replaced (`<redacted-token>`,
+    `?<redacted>`).
+  - A string ships only under a technical key in the allowlist (`gelfSafeKeys`
+    in `system/lib/logger/private.go`, `SAFE_KEYS` in `hal/log_redact.py`):
+    ids, enumerations, providers, models, versions, hardware and network
+    configuration. Every other string becomes `<redacted N chars>`.
+  - Go: the key is the `slog` attribute key, and the `slog` message ships as is
+    (a test rejects messages built by a formatting call). A std `log` line
+    arrives already formatted, so only its `[component]` tag ships.
+  - HAL: the handler reads the log call from the source file (HAL runs from
+    source) to tell literal text from values. Literal text ships; each value of
+    a `%`-template, f-string or `+` chain is checked by the name of the
+    expression passed (`self.model`, `e`), or for an unnamed expression by the
+    word before it (`provider=%s`). A message the source does not show as a
+    literal ships as `<redacted N chars>`.
+  - `logger.Private(...)` (Go) or `private(...)` (HAL) redacts a value even
+    under an allowlisted key. Never add a key that can hold what a person said,
+    who they are or what the device observed about them.
 
 ## Local Intent Matching
 
