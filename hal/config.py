@@ -317,6 +317,8 @@ FIRE_HAZARD_ENABLED = _cloud_perception_enabled("fire_hazard")
 FIRE_HAZARD_CHECK_INTERVAL_S = float(os.environ.get("HAL_FIRE_HAZARD_CHECK_INTERVAL_S", "5.0"))
 FIRE_HAZARD_CONFIDENCE_THRESHOLD = float(os.environ.get("HAL_FIRE_HAZARD_CONFIDENCE_THRESHOLD", "0.3"))
 FIRE_HAZARD_OVERLAP_THRESHOLD = float(os.environ.get("HAL_FIRE_HAZARD_OVERLAP_THRESHOLD", "0.2"))
+# A safe box holding at least this share of a flammable box (sofa, rug, blanket) is a room, not a container.
+FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO = float(os.environ.get("HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO", "0.8"))
 FIRE_HAZARD_CONFIRM_S = float(os.environ.get("HAL_FIRE_HAZARD_CONFIRM_S", "10.0"))
 # Re-alert pace for the SAME steady hazard; new types alert immediately.
 FIRE_HAZARD_DEDUP_WINDOW_S = float(os.environ.get("HAL_FIRE_HAZARD_DEDUP_WINDOW_S", "1800.0"))
