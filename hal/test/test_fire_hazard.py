@@ -464,6 +464,34 @@ def test_flame_inside_bonfire_is_not_safe(post):
     assert "safe_fire" not in _detect_types(post, dets)
 
 
+# --- containment: how much of the fire sits inside the container (#717) ----------
+
+CANDLE = "a single candle"
+BLANKET = "a single blanket"
+FIREPLACE = "a single fireplace"
+
+
+def test_assess_small_safe_box_inside_big_fire_does_not_excuse():
+    # A candle box on one flame column of a big fire: shared ÷ candle = 1.0, shared ÷ fire ≈ 0.02.
+    assert _assess(fire=[(0.5, 0.5, 0.4, 0.6)], safe=[(0.4, 0.7, 0.05, 0.1)]) == ["unsure_fire"]
+
+
+def test_assess_fire_fully_inside_container_is_safe():
+    assert _assess(fire=[(0.5, 0.4, 0.2, 0.2)], safe=[(0.5, 0.5, 0.4, 0.4)]) == ["safe_fire"]
+
+
+def test_candles_inside_room_fire_do_not_excuse_it(post):
+    # s072 (room fire next to a blanket) without the frame-sized fireplace box:
+    # two candle boxes on the flame columns sit inside the bonfire box.
+    dets = [
+        _det(BONFIRE, (117.0, 236.0, 176.0, 364.0), 0.59),
+        _det(CANDLE, (57.5, 372.0, 47.0, 110.0), 0.39),
+        _det(CANDLE, (101.5, 382.0, 47.0, 120.0), 0.38),
+        _det(BLANKET, (474.0, 340.0, 314.0, 278.0), 0.52),
+    ]
+    assert _detect_types(post, dets) == ["unsure_fire"]
+
+
 def _always_owlv2(*results):
     return _perception(_FakeGate(GateVerdict.UNAVAILABLE), _FakeDetector(*results))
 

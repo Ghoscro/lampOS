@@ -302,11 +302,11 @@ class RemoteFireHazardDetector:
             flammable_score = np.full(n_fire, -1.0)
 
         if n_safe > 0:
+            # Share of the fire inside the container. Dividing by the smaller box let a small
+            # box on a big fire (a "candle" on one flame column) excuse the whole fire (#717).
             safe_overlap = bbox_intersection(
                 fire_bboxes[:, None, :], safe_bboxes[None, :, :]
-            ) / np.minimum(
-                bbox_area(fire_bboxes[:, None, :]), bbox_area(safe_bboxes[None, :, :])
-            )
+            ) / bbox_area(fire_bboxes[:, None, :])
             safe_score = safe_overlap.max(axis=-1)
         else:
             safe_score = np.full(n_fire, -1.0)
