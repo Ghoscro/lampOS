@@ -153,10 +153,11 @@ class LBSetting(BaseModel):
     max_connections: int = 100
     max_keepalive: int = 20
 
-    # Two-slot deploy (scripts/deploy-dlserver.sh). When set, lbserver replaces the
-    # loopback entry of `backends` with the URL in this file, at startup and on
-    # SIGHUP, and records what it applied in "<state_file>.applied". Empty = off,
-    # which is exactly the single-dlserver behaviour.
+    # Two-slot switch (scripts/deploy-dlserver.sh, scripts/dlserver-mode.sh). When
+    # set, lbserver replaces the loopback entry of `backends` with the URLs in this
+    # file (one loopback URL per line; line 1 is the primary slot, two lines = both
+    # slots serve), at startup and on SIGHUP, and records what it applied in
+    # "<state_file>.applied". Empty = off, which is exactly the single-dlserver behaviour.
     state_file: str = ""
 
 
