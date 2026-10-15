@@ -189,6 +189,11 @@ frame gets `{"error": "busy"}` and the socket stays open.
 | `OVERLOAD__MAX_PENDING_PER_BATCH` | `8` | Backlog cap = max(`MAX_PENDING_MIN`, `BATCH_SIZE` × this); a request past it is refused at once |
 | `OVERLOAD__RETRY_AFTER_S` | `2.0` | Seconds sent in `Retry-After` (rounded up, at least 1) |
 
+HTTP routes check for room before decoding the image or audio, so a refused request
+costs almost nothing. Stream sessions (pose, action, object) rest a full frame
+interval after a refused frame, and the action session checks the action batcher
+before running the person detector, so no GPU work is thrown away.
+
 Speaker embedding (`/audio-recognizer/embed`) does not go through a batcher and is
 not limited here.
 

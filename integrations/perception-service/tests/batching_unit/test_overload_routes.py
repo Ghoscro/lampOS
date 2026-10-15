@@ -19,6 +19,9 @@ class _BusyPerception:
     def has_preset(self, name: str) -> bool:
         return True
 
+    def check_capacity(self) -> None:
+        pass  # room at check time; the queue fills before submit
+
     async def predict_image(self, image, classes=None, preset=None):
         raise BatcherOverloaded("backlog full (32)", 2.0)
 

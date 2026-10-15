@@ -142,6 +142,15 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
             )
             self._dropped = 0
 
+    def check_capacity(self, n: int = 1) -> None:
+        """Raise BatcherOverloaded if n more items would not fit.
+
+        Cheap, so callers check it before expensive work (decoding, other models).
+        """
+        if self._backlog() + n > self._max_pending:
+            self._note_drop(n, "backlog full")
+            raise BatcherOverloaded(f"backlog full ({self._max_pending})", self._retry_after_s)
+
     async def submit(self, inputs: list[INPUT_T], **kwargs: Any) -> list[asyncio.Future[OUTPUT_T]]:
         """Submit inputs for batched inference; returns one future per input.
 
@@ -151,9 +160,7 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
         if not self._running:
             raise RuntimeError("InputBatcher is not running")
         queue = self._ensure_loop()
-        if self._backlog() + len(inputs) > self._max_pending:
-            self._note_drop(len(inputs), "backlog full")
-            raise BatcherOverloaded(f"backlog full ({self._max_pending})", self._retry_after_s)
+        self.check_capacity(len(inputs))
         kwargs_key = deep_hash(kwargs) if kwargs else 0
         futures: list[asyncio.Future[OUTPUT_T]] = []
         loop = asyncio.get_running_loop()

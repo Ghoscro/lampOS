@@ -27,6 +27,10 @@ async def recognize_emotion(req: RecognizeEmotionRequest):
     model = get_audio_emotion_model()
     if model is None or not model.is_ready():
         raise HTTPException(status_code=503, detail="Audio emotion model not loaded")
+    try:
+        model.check_capacity()
+    except BatcherOverloaded as exc:
+        raise overloaded_http(exc) from exc
 
     try:
         audio = decode_b64_wav(req.audio_b64)

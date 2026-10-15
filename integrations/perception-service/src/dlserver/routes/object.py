@@ -107,6 +107,10 @@ async def object_detect(detector_name: str, req: ObjectDetectRequest):
     if object_model is None or not object_model.is_ready():
         raise HTTPException(status_code=503, detail=f"Object detector '{detector_name}' not loaded")
     _check_preset(object_model, detector_name, req)
+    try:
+        object_model.check_capacity()
+    except BatcherOverloaded as exc:
+        raise overloaded_http(exc) from exc
 
     try:
         frame = decode_image(req.image_b64)
@@ -134,6 +138,10 @@ async def object_detect_compat(detector_name: str, req: ObjectDetectRequest):
     if object_model is None or not object_model.is_ready():
         raise HTTPException(status_code=503, detail=f"Object detector '{detector_name}' not loaded")
     _check_preset(object_model, detector_name, req)
+    try:
+        object_model.check_capacity()
+    except BatcherOverloaded as exc:
+        raise overloaded_http(exc) from exc
 
     try:
         frame = decode_image(req.image_b64)

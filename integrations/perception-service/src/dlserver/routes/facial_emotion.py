@@ -108,6 +108,10 @@ async def emotion_recognize(req: EmotionRecognizeRequest):
     emotion_model = get_emotion_model()
     if emotion_model is None or not emotion_model.is_ready():
         raise HTTPException(status_code=503, detail="Facial emotion model not loaded")
+    try:
+        emotion_model.check_capacity()
+    except BatcherOverloaded as exc:
+        raise overloaded_http(exc) from exc
 
     try:
         face_crop = decode_image(req.image_b64)
