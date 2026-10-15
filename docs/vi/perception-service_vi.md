@@ -78,6 +78,13 @@ Schema request:
 Lựa chọn model và output:
 [`integrations/perception-service/docs/perceptions.md`](../../integrations/perception-service/docs/perceptions.md).
 
+**Quá tải.** Batcher của mỗi mô hình từ chối việc thay vì xếp hàng không giới hạn:
+khi hàng đợi vượt max(32, batch × 8), hoặc một yêu cầu đã chờ GPU quá 8 s, máy chủ
+trả `503` kèm `Retry-After: 2` (khung hình WebSocket nhận `{"error": "busy"}`), và
+HAL lùi lại 2–30 s. Speaker embedding không đi qua batcher nên không bị giới hạn
+kiểu này. Tham số: `OVERLOAD__*` trong
+[`configuration.md`](../../integrations/perception-service/docs/configuration.md#overload-overload__).
+
 ## Thiết bị dùng nó thế nào
 
 HAL là client chính. Trỏ nó tới backend bằng `DL_BACKEND_URL` và `DL_API_KEY` dùng

@@ -76,6 +76,13 @@ on the current GPU), never in the middle of a request. Request schema:
 Model choices and outputs:
 [`integrations/perception-service/docs/perceptions.md`](../integrations/perception-service/docs/perceptions.md).
 
+**Overload.** Each model's batcher refuses work instead of queueing it without
+limit: when its backlog passes max(32, batch × 8), or a request has waited over
+8 s for the GPU, the server answers `503` with `Retry-After: 2` (WebSocket frames
+get `{"error": "busy"}`), and HAL backs off 2–30 s. Speaker embedding is not
+batched and is not limited this way. Knobs: `OVERLOAD__*` in
+[`configuration.md`](../integrations/perception-service/docs/configuration.md#overload-overload__).
+
 ## Using it from a device
 
 HAL is the main client. Point it at the backend with `DL_BACKEND_URL` and the

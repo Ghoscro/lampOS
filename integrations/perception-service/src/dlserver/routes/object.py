@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
 
+from core.perception.base.batching import BatcherOverloaded
 from core.perception.object.perception import ObjectPerception
 from dlserver.models.object import (
     ObjectConfigRequest,
@@ -16,7 +17,7 @@ from dlserver.models.object import (
     ObjectRequest,
     ObjectResponse,
 )
-from dlserver.utils.common import decode_image, verify_ws_api_key
+from dlserver.utils.common import decode_image, overloaded_http, verify_ws_api_key
 from dlserver.utils.state import get_object_model, get_object_models
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -77,6 +78,9 @@ async def object_detection_ws(websocket: WebSocket, detector_name: str):
                         logger.warning("Unknown object WS message type: %s", raw[:200])
             except WebSocketDisconnect:
                 raise
+            except BatcherOverloaded:
+                # Busy: skip this frame without a traceback; the client keeps streaming.
+                await websocket.send_json({"error": "busy"})
             except Exception:
                 logger.exception("Error processing object detection WS message")
                 await websocket.send_json({"error": "Processing failed"})
@@ -114,6 +118,8 @@ async def object_detect(detector_name: str, req: ObjectDetectRequest):
         return ObjectDetectResponse.from_object_detection(result)
     except HTTPException:
         raise
+    except BatcherOverloaded as exc:
+        raise overloaded_http(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception:
@@ -146,6 +152,8 @@ async def object_detect_compat(detector_name: str, req: ObjectDetectRequest):
         ]
     except HTTPException:
         raise
+    except BatcherOverloaded as exc:
+        raise overloaded_http(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception:

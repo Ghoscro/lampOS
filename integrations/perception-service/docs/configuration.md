@@ -175,6 +175,22 @@ Recommended values for an RTX A5000 (24 GB) with all models loaded:
 | YOLO-World (object) | 2 | 0.05 | ~500 MB model + CLIP encoder |
 | OWLv2 (object) | 1 | 0.05 | ~600 MB model, 1008×1008 ViT |
 
+### Overload (`OVERLOAD__*`)
+
+Each `InputBatcher` refuses work instead of queueing it without limit (#612). A
+request refused or dropped here gets HTTP `503` with `Retry-After`; a WebSocket
+frame gets `{"error": "busy"}` and the socket stays open.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `OVERLOAD__MAX_WAIT_S` | `8.0` | A request still waiting for the GPU after this long is dropped before it runs. Kept under HAL's 15 s client timeout |
+| `OVERLOAD__MAX_PENDING_MIN` | `32` | Floor of the per-batcher backlog cap |
+| `OVERLOAD__MAX_PENDING_PER_BATCH` | `8` | Backlog cap = max(`MAX_PENDING_MIN`, `BATCH_SIZE` × this); a request past it is refused at once |
+| `OVERLOAD__RETRY_AFTER_S` | `2.0` | Seconds sent in `Retry-After` (rounded up, at least 1) |
+
+Speaker embedding (`/audio-recognizer/embed`) does not go through a batcher and is
+not limited here.
+
 ### Object detectors (all opt-in)
 
 Each detector has its own block: `OBJECT_DETECTOR__<NAME>__{ENABLED,USE_ONNX,MODEL_PATH,REMOTE_URL,CLASSES_PATH,THRESHOLD}`

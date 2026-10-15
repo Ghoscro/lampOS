@@ -6,12 +6,14 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
+from core.perception.base.batching import BatcherOverloaded
 from dlserver.models.audio_emotion import (
     LabelsResponse,
     RecognizeEmotionRequest,
     RecognizeEmotionResponse,
 )
 from dlserver.utils.audio import decode_b64_wav
+from dlserver.utils.common import overloaded_http
 from dlserver.utils.state import get_audio_emotion_model
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -38,6 +40,8 @@ async def recognize_emotion(req: RecognizeEmotionRequest):
         return RecognizeEmotionResponse.from_detection(detection, return_scores=req.return_scores)
     except HTTPException:
         raise
+    except BatcherOverloaded as exc:
+        raise overloaded_http(exc) from exc
     except Exception:
         logger.exception("Error processing audio emotion HTTP message")
         raise HTTPException(status_code=500, detail="Internal server error")
