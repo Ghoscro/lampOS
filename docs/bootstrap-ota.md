@@ -1444,45 +1444,73 @@ the previous services and records the rejected version so polling does not keep
 retrying it. A pending recovery journal is retained if that rejection cannot be
 persisted. `ACTIVATE=0` preserves existing version floors.
 
-### Build the V2 supervisor from main
-
-From a checkout containing the release tooling, run:
+### Build and publish the complete V2 service package
 
 ```bash
 make upload-lamp-os
 ```
 
-This command fetches `refs/heads/lamp-voice` from the checkout's `origin` into a
-private temporary repository, freezes the fetched commit, and extracts only
-`lampOS/`. It does not switch the current branch or include dirty source files.
-Using that workspace's pinned Rust toolchain and lockfile, it runs
-`cargo zigbuild --locked --release --target aarch64-unknown-linux-gnu -p lamp-keeper`.
-Prerequisites are Cargo/rustup, cargo-zigbuild, Zig, the pinned toolchain's
-`aarch64-unknown-linux-gnu` target, and authenticated `gsutil`.
+The command fetches and freezes `origin`'s `lamp-voice` commit in an isolated
+source directory. It builds the Rust workspace binaries and the OTA lifecycle
+adapter in a disposable Linux ARM64 Docker container, using the source's pinned
+Rust toolchain and lockfiles. Host Cargo/Zig are no longer required. Prerequisites:
+Docker with Linux ARM64 support, git, curl, Python 3.10+, authenticated gsutil and
+`OTA_SIGNING_PRIVATE_KEY` / `OTA_SIGNING_KEY_ID`. The Debian bookworm builder
+requires a Debian 12-compatible ARM64 runtime; this is not a universal robot image.
 
-The resulting supervisor is uploaded as `lamp-os`, with `build.json`, `VERSION` and
-`SHA256SUMS`, under
-`gs://${GCS_BUCKET}/${BUCKET_PREFIX}/services/lamp-os/builds/<version>/<commit>/<sha256>/`.
-The existing defaults are `s3-autonomous-upgrade-3` and `os`; environment overrides
-work as for other release commands. The command downloads the stored binary and
-checks its SHA-256 before reporting success. It validates an ARM64 ELF header
-before uploading. This is a build/provenance check, not a hardware qualification.
+The ZIP contains `VERSION`, `bin/service` (the Rust OTA lifecycle adapter),
+`bin/lamp-keeper`, the required V2 runtime binaries including the turn-end worker,
+SHA-pinned models/ONNX Runtime, linked non-glibc shared libraries, character and
+policy resources, unit templates, and a full file checksum manifest. Device secrets
+and calibration are never copied from a developer's test Lamp. `lamp-update` and
+`lamp-surround` binaries may be included but their independent update services are
+not activated: bootstrap owns this release's updates.
 
-This first-stage artifact is the `lamp-keeper` supervisor, intended to become
-`bin/service` in a later `lamp-os` service package. It is **not** the complete V2
-OTA ZIP: child binaries, models, device configuration/calibration and rendered
-units must be packaged and qualified separately. No OTA metadata, version floor,
-or activation setting is changed. Use `upload-service` only once that full
-package is ready; V1 and other device types remain unaffected by this upload.
+`system/VERSION_LAMP_OS` advances its patch after a complete package is built.
+The ZIP's VERSION and package.json contain the version; package.json also records
+the frozen source commit. Publication reuses `upload-service`: one content-addressed
+ZIP in `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/services/lamp-os/<sha256>.zip` and one
+signed `lamp-os` entry in the existing OTA JSON, with `replaces: ["hal", "os-server"]`.
+Existing promotion floors and activation settings are preserved; upload does not
+issue an activation promotion. Defaults remain bucket `s3-autonomous-upgrade-3`,
+prefix `os`. Serialize releases and retain the version-file change in release history.
 
-`system/VERSION_LAMP_OS` tracks this release stream independently of HAL and
-bootstrap. It starts at `0.0.0`; after a valid binary build, `upload-lamp-os`
-increments its patch version (first upload: `0.0.1`). That version is written to
-`build.json`, the uploaded `VERSION` file, and the GCS path. The keeper reads the
-release's `VERSION` file for OTA health; this command does not modify the Rust
-crate version. As with the existing release commands, a failed upload after the
-bump leaves the version file advanced. Keep release invocations serialized and
-retain the updated version file in the release history; do not hand-bump it.
+For local artifact validation without publishing or advancing the version file:
 
-If Cargo is missing from the caller's PATH, the command also checks
-`${CARGO_HOME:-$HOME/.cargo}/bin` for an existing installation. It does not install Rust.
+```bash
+LAMP_OS_BUILD_ONLY=1 LAMP_OS_OUTPUT=/path/lamp-os.zip make upload-lamp-os
+```
+
+The complete generic ZIP still needs a prepared device: root-owned,
+non-group/world-writable `/etc/lampOS/package-profile.json` with `unit_id`, a
+`substitutions` map for the manifest's declared placeholders, and optional
+`required_paths`. Values such as servo poses, device paths and service accounts
+must come from that Lamp. Private `/etc/lampOS/voice/provider.json` and controls
+configuration remain separately provisioned. Missing prerequisites or another
+host's identity fail preflight. This command does not implement automatic V1
+credential/calibration conversion. V2 runtime state placed outside the updater's
+private data directory is not covered by its data snapshot; schema changes there
+need a separately qualified backward-compatible migration/rollback policy.
+Inspect the packaged manifest for exact
+requirements before selecting a device for migration.
+
+The adapter creates child units and ownership drop-ins only under
+`/run/systemd/system`, binds them to `lamp-os`, and journals its own files before
+writing them. It does not enable or mask child/legacy units persistently. Normal
+shutdown and the fixed `ExecStopPost` cleanup operation remove only unchanged
+owned files; stop/cleanup failure prevents assuming rollback is complete. The
+`SERVICE_CLEANUP` marker opts into this operation; the updater also invokes
+cleanup synchronously after stopping a marked package, including recovery, so
+a failed systemd post-stop hook cannot be mistaken for success; existing packages without the
+marker keep their behavior. The generated top-level unit allows 60 seconds for
+shutdown. Upgrade the updater before installing this package: the adapter checks
+its cleanup capability and fails safely on older updaters. The keeper runs as a
+monitored child with its implicit installer disabled. The shared bus directory
+under `/run/lampos-bus` is intentionally retained until reboot; cleanup does not
+recursively remove IPC data.
+
+Health reports the adapter PID, version and child systemd activity with freshness
+checking. It does not prove successful speech, provider connectivity or physical
+motion safety. Real-device activation, reboot/interruption recovery and rollback
+must be tested before a migration promotion. No generic profile implies permission
+to replace other robot types or all Lamps.

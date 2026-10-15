@@ -1,6 +1,7 @@
 #!/bin/bash
 # Service OTA protocol: 1
 # Service OTA activation protocol: 1
+# Service OTA cleanup protocol: 1
 set -e
 # Metadata URL from the bootstrap config; OTA_METADATA_URL env overrides. No default.
 BOOTSTRAP_JSON="/root/config/bootstrap.json"
@@ -155,12 +156,29 @@ def service_state(key):
 def stop(key):
     before = service_state(key)
     if before.get('LoadState') == 'not-found':
+        cleanup_service(key)
         return
     systemctl('stop', key + '.service')
     after = service_state(key)
     if after.get('ActiveState') not in ('inactive', 'failed') or after.get('MainPID') != '0' or after.get('ControlPID') != '0':
         raise RuntimeError('Service did not stop: ' + key)
     verify_group_empty(key, before)
+    cleanup_service(key)
+
+
+def cleanup_service(key):
+    release = ROOT / key / 'current'
+    marker = release / 'SERVICE_CLEANUP'
+    if not marker.exists():
+        return
+    if marker.read_text().strip() != '1':
+        raise RuntimeError('Unsupported service cleanup contract')
+    # Do not infer cleanup success from systemd's failed/inactive state. Recovery
+    # after reboot also needs to remove any journalled package side effects.
+    run(str(release / 'bin/service'), 'cleanup', timeout=45,
+        cwd=str(DATA / key / 'current'),
+        env={**os.environ, 'AUTONOMOUS_SERVICE_NAME': key,
+             'AUTONOMOUS_SERVICE_DATA': str(DATA / key / 'current')})
 
 
 def verify_group_empty(key, before):
@@ -230,7 +248,10 @@ def healthy(key, entry):
     raise RuntimeError('Service readiness/version/PID check failed: ' + key)
 
 
-def unit_text(key):
+def unit_text(key, cleanup=True):
+    # Fixed, opt-in lifecycle operation; old packages without the marker do nothing.
+    cleanup_line = (f"ExecStopPost=/bin/sh -c 'test ! -f {ROOT}/{key}/current/SERVICE_CLEANUP || exec {ROOT}/{key}/current/bin/service cleanup'\n"
+                    if cleanup else '')
     return f'''[Unit]
 Description=Autonomous service {key}
 After=network-online.target
@@ -242,12 +263,12 @@ ConditionPathExists=!{STATE}/blocked/{key}
 Type=simple
 WorkingDirectory={DATA}/{key}/current
 ExecStart={ROOT}/{key}/current/bin/service serve
-Environment=AUTONOMOUS_SERVICE_NAME={key}
+{cleanup_line}Environment=AUTONOMOUS_SERVICE_NAME={key}
 Environment=AUTONOMOUS_SERVICE_DATA={DATA}/{key}/current
 Restart=on-failure
 RestartSec=2
 KillMode=control-group
-TimeoutStopSec=20
+TimeoutStopSec={60 if cleanup else 20}
 
 [Install]
 WantedBy=multi-user.target
@@ -263,7 +284,7 @@ def prepare_units(key, replaces, known, write=False):
     if key not in known:
         if unit.exists() or unit.is_symlink() or (UNITS / (key + '.service.d')).exists() or service_state(key).get('LoadState') != 'not-found':
             raise RuntimeError('Refusing to overwrite unmanaged system service: ' + key)
-    elif not unit.is_file() or unit.is_symlink() or unit.read_text() != unit_text(key):
+    elif not unit.is_file() or unit.is_symlink() or unit.read_text() not in (unit_text(key), unit_text(key, cleanup=False)):
         raise RuntimeError('Registered service unit changed outside updater: ' + key)
     # Validate every path before writing the first unit/dropin.
     for dep in replaces:
@@ -336,7 +357,7 @@ def switch(journal, direction):
         entry = target['components'].get(key)
         if entry:
             unit = UNITS / (key + '.service')
-            if unit.is_symlink() or (unit.exists() and unit.read_text() != unit_text(key)):
+            if unit.is_symlink() or (unit.exists() and unit.read_text() not in (unit_text(key), unit_text(key, cleanup=False))):
                 raise RuntimeError('Conflicting service unit during recovery')
             durable(unit, unit_text(key))
             link(ROOT / key / 'current', entry['release'])
@@ -432,6 +453,8 @@ def extract(archive, destination, version):
                 with package.open(item) as source, path.open('xb') as target:
                     shutil.copyfileobj(source, target)
                 path.chmod(0o755 if (item.external_attr >> 16) & 0o111 else 0o644)
+    if (destination / 'SERVICE_CLEANUP').exists() and (destination / 'SERVICE_CLEANUP').read_text().strip() != '1':
+        raise RuntimeError('Unsupported service cleanup contract')
     if (destination / 'VERSION').read_text().strip() != version or not os.access(destination / 'bin/service', os.X_OK):
         raise RuntimeError('Package version/entrypoint mismatch')
 
