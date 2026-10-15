@@ -91,7 +91,9 @@ the same GPU, turned on and off by hand (`make dlserver-two-slot`,
 always runs the same code as the first slot, and a container restart returns to one
 slot. A deploy in two-slot mode drops to one slot, deploys, then restores both; the
 in-place restart (`make start-runpod-master`) refuses until `make dlserver-single`.
-lbserver skips a slot that refuses connections for 10 s. Details:
+lbserver skips a slot that refuses connections for 10 s. Measured: +26 % OWLv2
+throughput but slower voice under load and double the GPU memory, so it is
+available but not recommended for normal traffic. Details:
 [Two-slot mode](../integrations/perception-service/docs/deployment.md#two-slot-mode-optional).
 
 ## Using it from a device

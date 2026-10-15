@@ -94,7 +94,9 @@ kiểu này. Tham số: `OVERLOAD__*` trong
 slot đầu, và khởi động lại container sẽ quay về một slot. Deploy khi đang ở chế độ hai
 slot sẽ về một slot, deploy, rồi bật lại cả hai; khởi động lại tại chỗ
 (`make start-runpod-master`) sẽ từ chối cho tới khi chạy `make dlserver-single`. lbserver bỏ qua slot từ chối kết nối
-trong 10 s. Chi tiết:
+trong 10 s. Đo thực tế: thông lượng OWLv2 tăng 26 % nhưng giọng nói chậm hơn khi tải
+cao và bộ nhớ GPU gấp đôi, nên có sẵn nhưng không khuyến nghị cho lưu lượng bình
+thường. Chi tiết:
 [Chế độ hai slot](../../integrations/perception-service/docs/deployment.md#two-slot-mode-optional).
 
 ## Thiết bị dùng nó thế nào

@@ -267,8 +267,11 @@ alongside it on the same GPU, switched by hand (#612):
 - lbserver skips a slot that refuses connections (HTTP only) for 10 s and sends
   that request once to the other slot. Timeouts and HTTP errors are never retried.
 - The two slots are separate processes, so their GPU work interleaves instead of
-  queuing behind one lock. Measure throughput and voice latency before relying on
-  it under load.
+  queuing behind one lock. Measured on the production GPU (2026-10-15): OWLv2 peak
+  6.45 → 8.13 req/s (+26 %), but voice gets slower under load (speaker embed p95
+  157–162 → 216–231 ms, SER p95 129–131 → 197–218 ms) and GPU memory doubles
+  (10.1 → 19.8 GB). Available, **not recommended** for normal traffic: single mode
+  plus the overload limits is the default.
 
 The scripts are `scripts/dlserver-mode.sh` and `scripts/deploy-dlserver.sh`, sharing
 `scripts/dlserver-slots.sh`; `tests/scripts_local/test_dlserver_mode.py` runs them
