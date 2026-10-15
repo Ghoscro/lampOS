@@ -603,6 +603,9 @@ async def lifespan(app: FastAPI):
                     # No face (`expression`) = no express_emotion tool.
                     enable_expression=("expression" in _profile.capabilities),
                 )
+                from hal.drivers.voice.lang_id.gate import build_gate
+
+                state.voice_service.set_language_gate(build_gate(os_cfg.get("stt_language")))
                 if state._mic_muted:
                     # Muted: build the pipeline but don't open the mic.
                     logger.info("VoiceService created but NOT started -- mic muted")

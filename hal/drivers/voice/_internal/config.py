@@ -87,6 +87,45 @@ STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
 # empty transcripts on short/quiet utterances).
 STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
+# Language gate (see lang_id/gate.py): before a live session opens, AmberNet
+# classifies the first LANG_GATE_SPEECH_S of speech and drops captures whose
+# selected language (`stt_language`) holds less than LANG_GATE_MIN_PROB of the full
+# 107-language softmax. off | shadow (log only) | enforce.
+_VOICE_RESOURCES = Path(__file__).resolve().parent.parent / "resources"
+LANG_ID_MODEL_PATH = Path(os.environ.get("HAL_LANG_ID_MODEL_PATH", str(_VOICE_RESOURCES / "ambernet.onnx")))
+LANG_ID_LABELS_PATH = Path(os.environ.get("HAL_LANG_ID_LABELS_PATH", str(_VOICE_RESOURCES / "ambernet.labels.json")))
+# Without a local model file, the release asset pinned here (url + sha256) is
+# downloaded in the background into LANG_ID_CACHE_DIR. The cache sits beside the
+# HAL tree (/opt/.models-hal on a device) because OTA replaces /opt/hal.
+LANG_ID_MODEL_MANIFEST = Path(os.environ.get("HAL_LANG_ID_MODEL_MANIFEST", str(_VOICE_RESOURCES / "ambernet.model.json")))
+LANG_ID_CACHE_DIR = Path(os.environ.get(
+    "HAL_LANG_ID_CACHE_DIR", str(Path(__file__).resolve().parents[4] / ".models-hal"),
+))
+# Pin identification to these CPU indices (e.g. "0,1,2,3" = four little A55 cores on
+# the lamp) so it never competes with the voice pipeline elsewhere; empty = no pin.
+LANG_ID_CPUS = [int(c) for c in os.environ.get("HAL_LANG_ID_CPUS", "").split(",") if c.strip()]
+# Inference threads; defaults to one per pinned CPU, else 2.
+LANG_ID_THREADS = int(os.environ.get("HAL_LANG_ID_THREADS", "") or len(LANG_ID_CPUS) or 2)
+LANG_GATE_MODE = os.environ.get("HAL_LANG_GATE", "enforce").strip().lower()
+LANG_GATE_MIN_PROB = float(os.environ.get("HAL_LANG_GATE_MIN_PROB", "0.5"))
+# Speech collected before judging; also the classification window.
+LANG_GATE_SPEECH_S = float(os.environ.get("HAL_LANG_GATE_SPEECH_S", "2.0"))
+# An utterance that ends with less speech than LANG_GATE_SPEECH_S is still judged
+# on what it has, down to this minimum (below 0.5 s acceptance collapses).
+LANG_GATE_MIN_SPEECH_S = float(os.environ.get("HAL_LANG_GATE_MIN_SPEECH_S", "0.7"))
+# Upper bound on how long the gate holds a capture while collecting speech.
+LANG_GATE_MAX_WAIT_S = float(os.environ.get("HAL_LANG_GATE_MAX_WAIT_S", "3.5"))
+# Captures with less than LANG_GATE_MIN_SPEECH_S of speech: "reject" or "accept".
+LANG_GATE_SHORT = os.environ.get("HAL_LANG_GATE_SHORT", "reject").strip().lower()
+# Only 16 kHz frames at or above this int16 RMS count as speech (post-AEC uplink:
+# silence ~5, speech in the thousands).
+LANG_GATE_SPEECH_RMS = float(os.environ.get("HAL_LANG_GATE_SPEECH_RMS", "300"))
+# A non-speech gap this long ends the utterance and stops the hold early.
+LANG_GATE_UTTERANCE_GAP_S = float(os.environ.get("HAL_LANG_GATE_UTTERANCE_GAP_S", "1.0"))
+# Debug: when set, every gate decision writes the scored speech and the whole held
+# capture (16 kHz WAVs, verdict and in_set in the name) to this directory.
+LANG_GATE_DUMP_DIR = os.environ.get("HAL_LANG_GATE_DUMP_DIR", "")
+
 SPEAKER_PREPASS_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_JOIN_S", "2.0"))
 SPEAKER_PREPASS_COMMIT_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_COMMIT_JOIN_S", "0.2"))
 
