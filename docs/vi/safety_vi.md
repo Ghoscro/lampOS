@@ -406,15 +406,20 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       giữ nguyên. Contact stop được kiểm tra trước cut-off, và tay đang giữ mà vẫn bị ép
       thì cut-off vẫn trip như cũ. Khi đặt `contact.release_after_s` (Lamp: `1` s), tay
       vẫn **giữ** tay đèn lâu chừng đó trong lúc tạm dừng — khớp vừa dừng vẫn ở sàn đã làm
-      nó dừng trở lên (sàn tải hoặc lag của đường bao đã học nếu có) hoặc bị đẩy lệch 1° khỏi
-      tư thế đã ghim (`CONTACT_RELEASE_LAG`), nếu khớp đó có sàn contact cố định, hoặc khớp
+      nó dừng trở lên (sàn tải hoặc lag của đường bao đã học nếu có) hoặc bị đẩy lệch thêm
+      1° (`CONTACT_RELEASE_LAG`) so với độ lệch nó tự ổn định ở 0,5 s sau khi ghim, độ lệch đó
+      tối đa tính 3° (`CONTACT_RELEASE_LAG_BASE_MAX`: ghim ở −72° mà không ai chạm,
+      `base_yaw` của lamp-75c9 vẫn gồng 40-45 % chống lực cáp và lệch 2,5-2,7°, nên ngưỡng
+      1° tuyệt đối làm nó rũ), nếu khớp đó có sàn contact cố định, hoặc khớp
       có sàn cố định khác (`base_yaw`, hai khớp wrist) ở mức sàn mà lần dừng đó so với nó
       (đường bao đã học tại đó, không cao hơn sàn cố định: trên lamp-75c9 tay giữ
       `wrist_pitch` ở 32 % trên sàn đường bao 17 % trong khi `wrist_roll` làm dừng, và sàn
       cố định 65 % giữ torque), hoặc khớp gánh trọng lượng vượt tải giữ đã học hay sàn
       tải/lag `off_playback` — thì không phải va chạm thoáng qua: driver log
       `[contact] … releasing torque` và chuyển sang cắt torque như cut-off (tay đèn rũ,
-      khoá `retry_s`, chime của cut-off). Chạm rồi buông trong khoảng đó thì chỉ tạm dừng.
+      khoá `retry_s`, chime của cut-off). Hết khoá, lệnh resume kéo tay đèn đang rũ về với
+      lực tới trần torque, nên contact stop bỏ qua đoạn ramp đó (`duration` + 0,5 s): trên
+      lamp-75c9 nó từng dừng `base_yaw` ở 60 %, nhả lại và lặp mỗi lần khoá. Chạm rồi buông trong khoảng đó thì chỉ tạm dừng.
       Sàn đã làm dừng quan trọng với đèn đã học: trên lamp-52e6 tay chặn `base_yaw` ở
       39.6 % (đường bao 18 %) nhưng không giữ nổi tới sàn cố định 55 %, chỉ giữ ở 23-36 %; trên lamp-a0ae (`P=16`) tay
       giữ `base_yaw` chỉ ở 12-16 % nhưng lệch 1.3-8.5°, còn `base_yaw` ghim yên không ai
@@ -476,7 +481,9 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       học trên lamp-52e6, còn các sàn này không trip nhầm lần nào qua ~3 phút (6
       recording + 90 s idle). Các sàn này đứng ngoài trong lúc một lệnh xoay trực tiếp chạy
       (`move_to`/`move_to_raw`: gaze/search quay, aim, `/servo/move`, khởi động, zero, park) và thêm `OFF_PLAYBACK_SETTLE_S`
-      (0,5 s) sau đó, lúc này chỉ còn các sàn cố định: lệnh nhanh chạy trước đà tăng tốc
+      (0,5 s) sau đó, và cả đoạn ramp vào một recording (cờ idle đã ổn định còn bật sau khi
+      halt, và trên lamp-75c9 đoạn ramp về từ tư thế aim −72° làm `base_yaw` trễ 17° rồi dừng
+      ở sàn đứng yên 10°); lúc này chỉ còn các sàn cố định: lệnh nhanh chạy trước đà tăng tốc
       của servo, và trên lamp-a0ae độ trễ đó (`wrist_roll` 12-14°) cùng tải lúc khởi động
       (`elbow_pitch` 54 %) đã dừng tay đèn 0,2 s sau khi bắt đầu những lần xoay không ai
       chạm. Máy đã học recording đang chạy — kể cả idle đã ổn định — dùng envelope của

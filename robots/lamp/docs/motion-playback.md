@@ -107,7 +107,8 @@ samples every joint's `Present_Load` at 20 Hz (`hal/drivers/motors/overload.py`)
   does not drop), silently, and blocks goal writes for 3 s. Then it eases back
   into idle from the pose it stopped at. A hand still holding the arm 1 s into that
   pause (`release_after_s`), the stopped joint still at the load or lag floor that
-  stopped it or pushed 1° off its pinned pose, or another of `base_yaw` and the wrists at
+  stopped it or pushed 1° further off its pinned pose than it settled to (that offset capped
+  at 3°), or another of `base_yaw` and the wrists at
   the floor that stop compared it against (`base_pitch`/`elbow_pitch` on the load and
   lag they learned to hold still in that pose plus the profile margins, else their
   `off_playback` floor or the cut-off: they hold the arm's weight even untouched), releases torque instead, like the overload cut-off. On lamp-52e6 these joints peak at 52 % in free
@@ -130,7 +131,9 @@ samples every joint's `Present_Load` at 20 Hz (`hal/drivers/motors/overload.py`)
   learned alongside, from every still spell (a learn run holds each end pose 4 s), into
   `/var/lib/hal/contact_hold.json`. Outside playback
   (gaze, tracking, `/servo/move`, holds) the fixed `contact.off_playback` floors apply,
-  except during a direct move and 0.5 s after it (a fast move outruns the servo's ramp).
+  except during a direct move and 0.5 s after it (a fast move outruns the servo's ramp)
+  and during the ramp into a recording. After a cut-off lockout the contact stop also sits
+  out the resume's ramp back.
   Settled idle uses this unit's own envelope when it has learned idle, else `off_playback`.
 - **Overload cut-off.** A joint at 80 % or more for 1.5 s (the arm is still forced while
   held) cuts torque on all servos, plays the ack chime and blocks every goal write for

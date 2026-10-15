@@ -427,15 +427,20 @@ Six conditions are enforced today; setup-incomplete is reserved.
       an arm still forced while held trips the cut-off as before. With
       `contact.release_after_s` set (Lamp: `1` s), a hand still **holding** the arm that
       long into the pause — the stopped joint still at or above the floor that stopped
-      it (its learned envelope load or lag floor when one applied) or pushed 1° off its
-      pinned pose (`CONTACT_RELEASE_LAG`), if that joint has a fixed contact floor, or any
+      it (its learned envelope load or lag floor when one applied) or pushed 1°
+      (`CONTACT_RELEASE_LAG`) further off its pin than it had settled to 0.5 s in, that
+      settled offset capped at 3° (`CONTACT_RELEASE_LAG_BASE_MAX`: pinned untouched at
+      −72°, lamp-75c9's `base_yaw` held 40-45 % against its cable and sat 2.5-2.7° off, and
+      a bare 1° let it go limp), if that joint has a fixed contact floor, or any
       other fixed-floor joint (`base_yaw`, the wrists) at the floor that stop compared it
       against (its learned envelope there, never above its fixed floor: on lamp-75c9 a
       hand held `wrist_pitch` at 32 % under a 17 % envelope floor while `wrist_roll` had
       stopped the arm, and the fixed 65 % kept it on), or a weight-bearing joint past its
       learned hold or `off_playback` load/lag floor — is not a bump: the driver logs `[contact] … releasing torque` and
       hands over to the cut-off's torque-off (arm goes limp, `retry_s` lockout, the
-      cut-off's chime). A bump let go within the window only pauses. The stopping floor
+      cut-off's chime). After that lockout the resume ramps the limp arm back at up to its
+      torque cap, so the contact stop sits out the ramp (`duration` + 0.5 s): on lamp-75c9
+      it stopped `base_yaw` at 60 %, released it again and looped every lockout. A bump let go within the window only pauses. The stopping floor
       matters on a learned unit: on lamp-52e6 a hand stopped `base_yaw` at 39.6 % (envelope
       18 %), holding it at 23-36 %; on lamp-a0ae (`P=16`) a hand held `base_yaw` at only
       12-16 % but 1.3-8.5° off, while a pinned `base_yaw` left alone drifted 0.0°. A weight-bearing joint (no fixed floor: `base_pitch`,
@@ -500,7 +505,10 @@ Six conditions are enforced today; setup-incomplete is reserved.
       (`move_to`/`move_to_raw`: gaze/search turns, aim, `/servo/move`, startup, zero, park) and `OFF_PLAYBACK_SETTLE_S`
       (0.5 s) after it, when only the fixed floors apply: a fast move outruns the
       servo's acceleration ramp, and on lamp-a0ae that lag (`wrist_roll` 12-14°) and
-      spin-up load (`elbow_pitch` 54 %) stopped the arm 0.2 s into untouched moves. A
+      spin-up load (`elbow_pitch` 54 %) stopped the arm 0.2 s into untouched moves. They
+      sit out the ramp into a recording too, which only the fixed floors watch: idle's
+      settled flag outlives a halt into the ramp back, and on lamp-75c9 that ramp from a
+      −72° aim trailed `base_yaw` 17° and stopped on the still floor of 10°. A
       unit that has learned the recording playing — settled idle included — uses its
       own envelope instead of `off_playback` (lamp-a0ae's heavier elbow idles at
       54-60 % against the 52 % taken from lamp-52e6). On

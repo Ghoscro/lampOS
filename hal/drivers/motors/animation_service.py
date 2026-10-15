@@ -62,6 +62,11 @@ CONTACT_RELEASE_LAG = 10
 # on the arm, even for less than release_after_s: that pause was no false stop, and the
 # envelope is not loosened for it. Before it the stop's own deceleration may still read.
 CONTACT_HELD_SETTLE_S = 0.5
+# The stopped joint's lag release counts from what it already trailed by at
+# CONTACT_HELD_SETTLE_S, capped at this (0.1 deg): pinned untouched at -72 deg, lamp-75c9's
+# base_yaw held 40-45 % against its cable and sat 2.5-2.7 deg off, so a bare 1 deg let it
+# go limp; a hand already on it from the stop still releases past the cap plus 1 deg.
+CONTACT_RELEASE_LAG_BASE_MAX = 30
 
 
 # Plays per recording a learn run allows before giving up on a full pass.
@@ -242,6 +247,10 @@ class AnimationService:
         # during its pause (see CONTACT_HELD_SETTLE_S).
         self._contact_stop_t = 0.0
         self._contact_touched = False
+        # The stopped joint's lag channel still waiting for its settled baseline.
+        self._contact_lag_pending: Optional[str] = None
+        # No contact stop before this (contact clock): the ramp back after a cut-off.
+        self._contact_quiet_until = float("-inf")
         # Learned holding load of base_pitch / elbow_pitch per pose, for that release.
         self._hold = (
             HoldLearner(
@@ -1252,6 +1261,15 @@ class AnimationService:
             lags = self._read_lags()
             if lags:
                 samples.update(lags)
+            pending = self._contact_lag_pending
+            if (
+                pending is not None and pending in samples
+                and contact._clock() - self._contact_stop_t >= CONTACT_HELD_SETTLE_S
+            ):
+                self._contact_lag_pending = None
+                floor = min(samples[pending], CONTACT_RELEASE_LAG_BASE_MAX) + CONTACT_RELEASE_LAG
+                known = self._contact_hold_floors.get(pending)
+                self._contact_hold_floors[pending] = floor if known is None else min(known, floor)
             held = self._contact_hold.observe(samples, self._contact_hold_floors or None)
             if held:
                 self._contact_release(*held)
@@ -1268,7 +1286,7 @@ class AnimationService:
                 )
             ):
                 self._contact_touched = True
-        if contact is not None:
+        if contact is not None and self._contact_now() >= self._contact_quiet_until:
             samples, floors = self._contact_samples(loads)
             hit = contact.observe(samples, floors)
             if hit:
@@ -1437,7 +1455,10 @@ class AnimationService:
             floors = profile.floors(*position)
             if floors:
                 return samples, floors
-        if off and (self._current_recording is None or self._idle_settled):
+        # Still, not ramping: _idle_settled outlives a halt into the ramp back to idle, and
+        # on lamp-75c9 that ramp from a -72 deg aim trailed base_yaw 17 deg and stopped on
+        # the still floor of 10.
+        if off and (self._current_recording is None or self._idle_settled) and self._interpolation_frames == 0:
             samples = dict(loads)
             lags = self._read_lags()
             if lags:
@@ -1621,10 +1642,10 @@ class AnimationService:
                     if known is not None:
                         floor = min(floor, known)
                 self._contact_hold_floors[joint] = floor
+            self._contact_lag_pending = None
             if self._contact.threshold_for(motor) is not None:
-                lag = LAG_PREFIX + motor
-                self._contact_hold_floors[lag] = min(
-                    self._contact_hold_floors.get(lag, CONTACT_RELEASE_LAG), CONTACT_RELEASE_LAG)
+                # Its lag release is set once the pin settles (see CONTACT_RELEASE_LAG_BASE_MAX).
+                self._contact_lag_pending = LAG_PREFIX + motor
         # Logged after the stop: nothing here may delay or skip it.
         unit = "deg behind" if joint.startswith(LAG_PREFIX) else "% load"
         logger.warning(
@@ -1687,6 +1708,9 @@ class AnimationService:
             logger.info("[overload] lockout over — body is parked, torque stays off until resume")
             return
         logger.info("[overload] lockout over — re-enabling servos")
+        # The resume ramps the limp arm back at up to its torque cap: on lamp-75c9 that
+        # stopped base_yaw at 60 %, released it again, and looped every lockout.
+        self._contact_quiet_until = self._contact_now() + self.duration + OFF_PLAYBACK_SETTLE_S
         self.resume()
 
     def joint_status(self) -> Dict[str, dict]:
