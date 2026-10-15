@@ -581,6 +581,15 @@ Overview is organized into three always-visible zones: **System health** (Agent,
 > long names such as `acknowledge`; when a card is narrow, the pill cloud wraps
 > below it rather than overlapping the current state.
 
+### Connectors (Settings → Connectors)
+
+Third-party accounts the robot can use are grouped under **Settings → Connectors**, next to the other Settings sections. They have no shared Save Changes button; each page saves its own connection.
+
+- **Facebook** — a Page ID and a Page Access Token, saved through `POST /api/device/connectors/pat`.
+- **Shopify** — the store is linked with the customer's **own Shopify app**: the page asks for the **Store domain**, the app's **Client ID** and its **Client secret** (masked, with a show/hide toggle). The domain is cleaned up on submit (trimmed, lowercased, a pasted `https://…` or path removed, a bare handle completed to `<handle>.myshopify.com`) and the device checks all three against Shopify once before saving (`PUT /api/device/connectors/shopify`). The page then shows the connected store, with **Reconnect** and **Disconnect**. The secret is never shown again and is never returned by the API. A collapsible **How to create your Shopify app** guide (six steps plus troubleshooting) sits under the form; it is the same text the autonomous.ai connect form shows. Tokens last 24 hours and the device renews them itself, so there is nothing to refresh by hand.
+
+The page saves the credentials on the device and only the connected status is reported to the account, so the privacy line reads "Saved on this device. Only the connected status is shared with your account."
+
 ### Settings readability
 
 Settings dropdowns use themed Radix menus with an amber selection, viewport-aware placement, scrolling, keyboard navigation and Escape dismissal. Empty-value Auto/default choices remain selectable. General retains its existing controls.

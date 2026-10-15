@@ -747,6 +747,41 @@ writer đặc biệt, và chủ động xoay vòng entry nào có CẢ `refresh_
 `refresh:true` (backend sở hữu quyền quyết định refresh qua cờ `refresh`) khi còn dưới
 10 phút là hết hạn, qua endpoint backend `/connector/refresh-token`.
 
+**Biến theo từng kết nối:** connector có API hoặc token endpoint riêng cho từng tài
+khoản (ví dụ domain của cửa hàng) có thể mang các giá trị đó trong map `credentials` được
+relay: các khóa riêng lẻ (vd `shop`) cùng `connector_vars`, một JSON object gồm các giá
+trị chuỗi. Với connector refresh qua backend, thiết bị lưu chúng cùng phần còn lại của
+`credentials` và, ở mỗi lần refresh, gửi object đã parse làm `vars` trong body của
+`/connector/refresh-token` (`{"connector","refresh_token","vars":{...}}`) để backend gọi
+đúng tài khoản đó. `vars` bị bỏ qua khi connector không có biến nào, nên connector với
+endpoint tĩnh gửi đúng body như trước. `connector_vars` không parse được sẽ được log (chỉ
+tên connector) và coi như không có. Bước ghi lại sau refresh giữ nguyên `credentials` đã
+lưu, nên các giá trị này tồn tại qua mọi lần xoay vòng token.
+
+**Skill connector (`skills/connectors`):** agent gọi các dịch vụ đã liên kết qua
+`scripts/connector.py`, chỉ gửi credential tới host chính thức của connector. Phần lớn
+host cố định theo connector; **Shopify** thì theo từng tài khoản: helper gửi token (trong
+`X-Shopify-Access-Token`, không phải `Authorization`) chỉ tới đúng host cửa hàng lưu trong
+`credentials.shop` và từ chối mọi host khác. Skill mô tả cách tạo sản phẩm nháp và bài
+viết, và chặn mọi thứ khách hàng nhìn thấy sau bước đọc lại để xác nhận.
+
+**Shopify là connector dùng client credentials.** Khách hàng tự tạo app Shopify của họ và
+nhập domain cửa hàng, client ID và client secret trong ứng dụng Autonomous. Backend kiểm
+tra bằng cách tạo thử một token, rồi relay `connector.set.shopify` với
+`auth_type: "pat"`, một `access_token` sống khoảng 24 giờ, **không** có refresh token,
+`refresh: false`, và `credentials` gồm `{shop, client_id, client_secret}`. Vì không có
+refresh token nên entry không bao giờ vào vòng lặp `/connector/refresh-token` (vòng lặp
+chỉ chọn entry có `refresh_token` và `refresh:true`). Thay vào đó, helper của skill tự gia
+hạn token: trước mỗi lời gọi, nếu token đã lưu bị thiếu hoặc còn dưới năm phút, nó gửi
+POST `grant_type=client_credentials` kèm client ID và secret đã lưu tới
+`https://<shop đã lưu>/admin/oauth/access_token` (chỉ host đó, không theo redirect) và
+cache kết quả trong `shopify.token.json` cạnh file entry. Cache do helper sở hữu (mode
+`0600`, ghi nguyên tử), được gắn với hash của shop + client ID nên bị bỏ qua khi một trong
+hai đổi, không bao giờ chứa secret, và bị xóa ở lần helper tiếp theo phát hiện connector đã bị gỡ. Helper không bao giờ ghi
+lại file entry do connector writer quản lý, thử lại đúng một lần với token mới sau khi gặp
+`401`, và không in token lẫn secret. Nếu Shopify từ chối credentials đã lưu, helper thoát
+với thông báo "kết nối lại" thay vì lặp vô hạn.
+
 #### `channel.refresh_config`
 
 Áp dụng lại block config chuẩn của một channel trên thiết bị đã onboard — cho các khách
