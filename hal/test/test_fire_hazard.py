@@ -411,6 +411,59 @@ def test_assess_fire_and_smoke():
     assert _assess(fire=[_BOX], smoke=[_BOX]) == ["smoke", "unsure_fire"]
 
 
+# --- flame words count as fire, not as a safe container (#717) -------------------
+
+BONFIRE = "a single bonfire"
+CAMPFIRE = "a single campfire"
+TORCH = "a single torch"
+COUCH = "a single couch"
+FIRE_BOWL = "a single fire bowl"
+
+
+def _detect_types(post, dets) -> list[str]:
+    post.responses = [_Resp(200, {"detections": dets})]
+    return sorted(h.type.value for h in _detector().detect(FRAME))
+
+
+def test_flame_words_are_fire_classes():
+    det = _detector()
+    for name in (BONFIRE, CAMPFIRE, TORCH):
+        assert name in det._fire_set
+        assert name not in det._safe_set
+
+
+@pytest.mark.parametrize("name", [BONFIRE, CAMPFIRE, TORCH])
+def test_flame_word_alone_is_unsure_fire(post, name):
+    assert _detect_types(post, [_det(name)]) == ["unsure_fire"]
+
+
+def test_bonfire_on_couch_is_hazard(post):
+    # fire-3.jpg (sofa on fire): OWLv2 boxes, 640x480.
+    dets = [_det(BONFIRE, (413.1, 207.8, 146.9, 271.3), 0.67), _det(COUCH, (320.0, 312.8, 382.5, 285.6), 0.68)]
+    assert _detect_types(post, dets) == ["hazard_fire"]
+
+
+def test_torch_on_couch_is_hazard(post):
+    dets = [_det(TORCH, (300, 300, 60, 120)), _det(COUCH, (320, 320, 380, 280))]
+    assert _detect_types(post, dets) == ["hazard_fire"]
+
+
+def test_bonfire_in_fire_bowl_is_safe(post):
+    # fire-2.jpg (garden fire bowl): bonfire above the rim, bowl, wooden furniture to the left.
+    dets = [
+        _det(BONFIRE, (303.4, 265.3, 124.4, 73.4), 0.61),
+        _det(FIRE_BOWL, (308.1, 311.9, 297.5, 78.1), 0.87),
+        _det(FLAMMABLE, (132.5, 280.2, 263.1, 61.3), 0.43),
+    ]
+    assert _detect_types(post, dets) == ["safe_fire"]
+
+
+def test_flame_inside_bonfire_is_not_safe(post):
+    # Dataset case: a flame box inside a bonfire box used to excuse itself as safe_fire.
+    dets = [_det(FIRE, (300, 260, 60, 80), 0.64), _det(BONFIRE, (300, 250, 200, 160), 0.33)]
+    assert "safe_fire" not in _detect_types(post, dets)
+
+
 def _always_owlv2(*results):
     return _perception(_FakeGate(GateVerdict.UNAVAILABLE), _FakeDetector(*results))
 
