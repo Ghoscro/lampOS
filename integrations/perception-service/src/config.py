@@ -160,6 +160,17 @@ class LBSetting(BaseModel):
     state_file: str = ""
 
 
+class OverloadSetting(BaseModel):
+    """Per-batcher overload limits (#612). Past them a request gets 503 + Retry-After."""
+
+    # Under HAL's 15 s client timeout, so a served result still reaches the lamp.
+    max_wait_s: float = 8.0
+    # Backlog cap = max(max_pending_min, batch_size * max_pending_per_batch).
+    max_pending_min: int = 32
+    max_pending_per_batch: int = 8
+    retry_after_s: float = 2.0
+
+
 class Settings(BaseSettings):
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_file=".env", env_nested_delimiter="__", extra="allow"
@@ -187,6 +198,7 @@ class Settings(BaseSettings):
     audio_embedder: AudioEmbedderSetting = AudioEmbedderSetting()
 
     input_limits: InputLimitSetting = InputLimitSetting()
+    overload: OverloadSetting = OverloadSetting()
 
     crypto: CryptoSetting = CryptoSetting()
     lb: LBSetting = LBSetting()

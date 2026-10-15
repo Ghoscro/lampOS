@@ -316,7 +316,7 @@ test: test-api test-local
 
 test-api: test-action-api test-fer-api test-ser-api test-pose-api test-object-api test-audio-api test-crypto-api
 
-test-local: test-action-local test-fer-local test-ser-local test-pose-local test-object-local test-audio-local test-crypto-local test-lb-local
+test-local: test-action-local test-fer-local test-ser-local test-pose-local test-object-local test-audio-local test-crypto-local test-lb-local test-batching-unit
 
 test-action: test-action-api test-action-local
 
@@ -361,6 +361,9 @@ test-object: test-object-unit test-object-api test-object-local
 # No leading '-': a failing unit test fails the target.
 test-object-unit:
 	DL_API_KEY=$${DL_API_KEY:-test} python -m pytest tests/object_unit/ -v
+
+test-batching-unit:
+	DL_API_KEY=$${DL_API_KEY:-test} python -m pytest tests/batching_unit/ -v
 
 test-object-api:
 	-python -m pytest tests/object_api/ -v
