@@ -89,7 +89,8 @@ batched and is not limited this way. Knobs: `OVERLOAD__*` in
 the same GPU, turned on and off by hand (`make dlserver-two-slot`,
 `make dlserver-single`, `make dlserver-mode`). It needs about 9.7 GB more GPU memory,
 always runs the same code as the first slot, and a container restart returns to one
-slot. A deploy in two-slot mode drops to one slot, deploys, then restores both.
+slot. A deploy in two-slot mode drops to one slot, deploys, then restores both; the
+in-place restart (`make start-runpod-master`) refuses until `make dlserver-single`.
 lbserver skips a slot that refuses connections for 10 s. Details:
 [Two-slot mode](../integrations/perception-service/docs/deployment.md#two-slot-mode-optional).
 

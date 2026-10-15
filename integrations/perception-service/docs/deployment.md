@@ -257,6 +257,9 @@ alongside it on the same GPU, switched by hand (#612):
   above, then turns two-slot back on with the new code. One slot serves
   throughout. If the deploy fails it stays in single mode
   (`make dlserver-two-slot` to retry).
+- The in-place restart (`make start-runpod-master` / `make start-runpod-dlserver`)
+  refuses in two-slot mode, because `install` would rewrite the venv under the slot
+  that keeps serving: run `make dlserver-single` first.
 - The state file is in `/tmp`, so a container restart always comes back in single
   mode. Restarting lbserver alone keeps the current mode.
 - Switching to single drops open WebSocket streams on the stopped slot once; HAL

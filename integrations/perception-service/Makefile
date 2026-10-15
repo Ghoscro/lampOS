@@ -3,7 +3,7 @@
        start-runpod-master start-runpod-master-ssl start-runpod-slave start-runpod-slave-ssl \
        start-nginx start-nginx-ssl stop-nginx gen-ssl-cert \
        start-runpod-dlserver start-runpod-dlserver-slot start-runpod-lbserver stop-runpod-dlserver stop-runpod-lbserver start-jupyter \
-       deploy-dlserver dlserver-two-slot dlserver-single dlserver-mode print-dlserver-pid \
+       deploy-dlserver dlserver-two-slot dlserver-single dlserver-mode require-single-slot print-dlserver-pid \
        info \
        test test-api test-local \
        test-action test-action-api test-action-local \
@@ -217,7 +217,13 @@ define START_DLSERVER
 @echo "dlserver started on port $(DLSERVER_PORT) (auto-restart enabled)"
 endef
 
-start-runpod-dlserver: install stop-runpod-dlserver
+# In two-slot mode `install` would rewrite the venv under the slot that keeps serving.
+require-single-slot:
+	@if [ "$$(grep -c '^http://' $(DLSERVER_STATE_FILE) 2>/dev/null || echo 0)" -gt 1 ]; then \
+		echo "two-slot mode is on: run make dlserver-single first"; exit 1; \
+	fi
+
+start-runpod-dlserver: require-single-slot install stop-runpod-dlserver
 	$(START_DLSERVER)
 
 # Same without `install`: the deploy starts the new slot while the old one still

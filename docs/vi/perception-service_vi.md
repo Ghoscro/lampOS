@@ -92,7 +92,8 @@ kiểu này. Tham số: `OVERLOAD__*` trong
 đầu trên cùng GPU, bật tắt bằng tay (`make dlserver-two-slot`, `make dlserver-single`,
 `make dlserver-mode`). Nó cần thêm khoảng 9.7 GB bộ nhớ GPU, luôn chạy cùng code với
 slot đầu, và khởi động lại container sẽ quay về một slot. Deploy khi đang ở chế độ hai
-slot sẽ về một slot, deploy, rồi bật lại cả hai. lbserver bỏ qua slot từ chối kết nối
+slot sẽ về một slot, deploy, rồi bật lại cả hai; khởi động lại tại chỗ
+(`make start-runpod-master`) sẽ từ chối cho tới khi chạy `make dlserver-single`. lbserver bỏ qua slot từ chối kết nối
 trong 10 s. Chi tiết:
 [Chế độ hai slot](../../integrations/perception-service/docs/deployment.md#two-slot-mode-optional).
 
