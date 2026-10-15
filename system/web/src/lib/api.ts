@@ -615,6 +615,23 @@ export async function setShopify(body: {
   });
 }
 
+/** PUT /api/device/connectors/ebay — the device exchanges the eBay sign-in code (or checks a pasted refresh token), then saves the link. */
+export async function setEbay(body: {
+  environment: "production" | "sandbox";
+  marketplace_id: string;
+  client_id: string;
+  client_secret: string;
+  ru_name: string;
+  code?: string;
+  refresh_token?: string;
+}): Promise<{ connector: string; connected: boolean; refresh_token_expires_at?: number }> {
+  return apiRequest(`${API_BASE}/api/device/connectors/ebay`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** DELETE /api/device/connectors/:code — drops the on-disk entry (and any mcp.servers.<code> side-effect through the writer). */
 export async function removeConnector(code: string): Promise<{ connector: string; removed: boolean }> {
   return apiRequest(`${API_BASE}/api/device/connectors/${encodeURIComponent(code)}`, {

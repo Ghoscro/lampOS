@@ -41,6 +41,9 @@ type DeviceMQTTHandler struct {
 	// shopifyHTTP is the client for the one Shopify credential check the local
 	// Settings page makes; nil means the default (short timeout, no redirects).
 	shopifyHTTP *http.Client
+	// ebayHTTP is the client for the eBay sign-in exchange on the local
+	// Settings page; nil means the default (short timeout, no redirects).
+	ebayHTTP *http.Client
 	// publishConnectorResult, when set, replaces publishDataResult for the local
 	// connector pages so tests don't need a broker.
 	publishConnectorResult func(kind, status, errMsg string, data interface{}) error
