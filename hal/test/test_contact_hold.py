@@ -245,3 +245,32 @@ def test_a_learn_run_holds_each_end_pose_through_a_pause(hold_rig):
     with mock.patch("time.time", return_value=100.0):
         svc._continue_playback()
     assert svc._hold_until == pytest.approx(104.0)
+
+
+def test_no_bus_read_for_the_hold_while_the_goals_are_known_to_move(hold_rig):
+    """The ramp into a recording and a direct move's settle: no still spell, no lag read."""
+    svc = hold_rig.svc
+    svc._current_recording = "stretching"
+    svc._current_actions = [{}] * 8
+    svc._interpolation_frames = 10
+    hold_rig.bus.reads.clear()
+    _ticks(hold_rig, 0.2)
+    assert set(hold_rig.bus.reads) == {"Present_Load"}
+    svc._interpolation_frames = 0
+    svc._current_frame_index = 8                 # holding its final pose
+    svc._direct_move_ended = svc._contact_now()
+    hold_rig.bus.reads.clear()
+    _ticks(hold_rig, 0.4)
+    assert set(hold_rig.bus.reads) == {"Present_Load"}
+    _ticks(hold_rig, 0.2)                        # settled: the hold samples it again
+    assert "Present_Position" in hold_rig.bus.reads
+
+
+def test_a_lighter_spell_does_not_lower_a_measured_hold(tmp_path):
+    learner, clock = _learner(tmp_path)
+    for _ in range(2):
+        _spell(learner, clock, _held(), trusted=True)
+    for _ in range(8):
+        _spell(learner, clock, _held(pitch=150, elbow=200))
+    assert learner.floors(POSE)["base_pitch"] == 250 + 120
+    assert learner.floors(POSE)["elbow_pitch"] == 334 + 120

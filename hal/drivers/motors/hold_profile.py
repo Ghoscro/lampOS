@@ -132,24 +132,35 @@ class HoldLearner:
         if len(runs) < PASSIVE_MIN_RUNS:
             return
         old = self.profile.envelope(key)
+        measured = self.profile.measured(key)
         new: Dict[str, List[Optional[int]]] = {}
+        real: Dict[str, List[Optional[int]]] = {}
         for name in self._defaults:
             seen = sorted((run[name] for run in runs if name in run), reverse=True)
             prior = (old.get(name) or [None])[0]
+            was = (measured.get(name) or [None])[0]
             if not seen:
                 if prior is not None:
                     new[name] = [prior]
+                if was is not None:
+                    real[name] = [was]
                 continue
             start = self._start(name)
             value = seen[1] if len(runs) >= PASSIVE_RUNS and len(seen) > 1 else seen[0]
             if start is not None:
                 value = min(value, start)
+            # Measured once, a hold stays: a lighter spell does not lower it.
+            if was is not None and was > value:
+                value = was
+            real[name] = [value]
             if prior is None and not trusted:
                 prior = start
+            # Only what is above the measured (the fixed floor it starts from) falls.
             if prior is not None and value < prior and not trusted:
                 value = prior - max(1, round((prior - value) * PASSIVE_FALL_SHARE))
             new[name] = [value]
         self.profile.replace(key, new)
+        self.profile.replace_measured(key, real)
         self._dirty = True
 
     def floors(self, pose: Dict[str, float]) -> Dict[str, int]:

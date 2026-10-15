@@ -445,8 +445,8 @@ Six conditions are enforced today; setup-incomplete is reserved.
       torque on, learn run or not, is sampled the way a pause sees a pinned arm, past a
       0.5 s settle for the last move's lag, for `base_pitch` / `elbow_pitch` load and lag.
       The peaks are kept per pose cell of 5° x 5° (`base_pitch`, `elbow_pitch`) and
-      updated like the passive envelope (2 spells, the first falling 25 % of the gap from
-      the fixed floor per spell, a heavier one rising at once; a learn run's spells,
+      updated like the passive envelope (2 spells, falling 25 % of the gap per spell from
+      the fixed floor but never under a hold once measured, a heavier one rising at once; a learn run's spells,
       held 4 s at each recording's end pose, set the cell outright). In a pause these
       joints release at the learned peak (the cell and its ±1 neighbours) plus the profile
       margins, and only where that is under their `off_playback` floor (and, for a
@@ -510,11 +510,13 @@ Six conditions are enforced today; setup-incomplete is reserved.
       them: their per-frame max while fewer than 5 (the loosest), then the second
       highest, so one run a hand brushed does not count. A higher value replaces the
       envelope at once, so a heavy frame stops the arm only once, up to the cut-off's
-      80 % for load and 30° for lag; a lower one comes down a quarter of the gap per
-      update, so a few cool runs do not make it touchy. A recording's first envelope
-      comes down the same way from the fixed floors it ran under before (Lamp: the
-      contact `load` floors, then `off_playback` load and lag, then a capped joint's
-      `torque_limit`), so it starts where the lamp stood. A frame a later run reaches for
+      80 % for load and 30° for lag. A value once measured (by a clean run or a learn
+      run; the highest per frame is saved in `contact_profile.json.measured`) is never
+      lowered by lighter runs after it. Only what sits above it comes down, a quarter of
+      the gap per update: a recording's first envelope, which starts at the fixed floors
+      it ran under before (Lamp: the contact `load` floors, then `off_playback` load and
+      lag, then a capped joint's `torque_limit`), so it starts where the lamp stood, and
+      a false stop's raise. A frame a later run reaches for
       the first time (20 Hz sampling skips some 30 fps frames on each run) falls from
       its learned neighbours within ±3 frames instead, so it does not hold its whole
       floor window up at the fixed floor. A run that trips never

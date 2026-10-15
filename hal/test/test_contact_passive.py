@@ -275,3 +275,48 @@ def test_an_envelope_saved_before_signatures_is_kept(tmp_path):
     path = str(tmp_path / "p.json")
     ContactProfile(path, 100, {"idle": {"base_pitch": [300]}}).save()
     assert ContactProfile.load(path, 100, signature="caps=700").floors("idle", 0) == {"base_pitch": 400}
+
+
+# --- Measured values are never lowered -------------------------------------------
+
+
+def test_a_lighter_run_does_not_lower_what_a_learn_run_measured(tmp_path):
+    learner, profile, _ = _learner(tmp_path, defaults={"base_pitch": 570})
+    for frame in range(TOTAL):
+        profile.learn("idle", frame, {"base_pitch": 300})
+    for _ in range(8):
+        _run(learner, 200)
+    assert profile.envelope("idle")["base_pitch"] == [300] * TOTAL
+
+
+def test_the_fixed_floor_falls_only_down_to_the_highest_measured(tmp_path):
+    """470 (fixed floor) falls toward the 270 measured first; lighter runs after never pull it under."""
+    learner, profile, _ = _learner(tmp_path, defaults={"base_pitch": 570})
+    for _ in range(cp.PASSIVE_MIN_RUNS):
+        _run(learner, 270)
+    assert profile.envelope("idle")["base_pitch"][5] == 420
+    for _ in range(30):
+        _run(learner, 150)
+    assert profile.envelope("idle")["base_pitch"] == [270] * TOTAL
+
+
+def test_a_heavier_run_still_raises_at_once(tmp_path):
+    learner, profile, _ = _learner(tmp_path)
+    for frame in range(TOTAL):
+        profile.learn("idle", frame, {"base_pitch": 300})
+    for _ in range(cp.PASSIVE_MIN_RUNS):
+        _run(learner, 360)
+    assert profile.envelope("idle")["base_pitch"] == [360] * TOTAL
+
+
+def test_what_was_measured_survives_a_restart(tmp_path):
+    learner, profile, _ = _learner(tmp_path, defaults={"base_pitch": 570})
+    for _ in range(cp.PASSIVE_MIN_RUNS):
+        _run(learner, 270)
+    profile.save()
+    reloaded = ContactProfile.load(str(tmp_path / "p.json"), 100, 30)
+    assert reloaded.measured("idle")["base_pitch"] == [270] * TOTAL
+    again = PassiveLearner(reloaded, {"base_pitch": 570}, clock=_Clock())
+    for _ in range(30):
+        _run(again, 150)
+    assert reloaded.envelope("idle")["base_pitch"] == [270] * TOTAL

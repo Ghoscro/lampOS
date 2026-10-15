@@ -1279,12 +1279,18 @@ class AnimationService:
         """Feed the hold learner while the arm may be still with torque on.
 
         Reuses this tick's lag read; reads one only where the contact stop did not
-        (a recording's held final pose, no learned envelope).
+        (a recording's held final pose, no learned envelope). Never while the goals
+        are known to move (the ramp into a recording, a direct move and its settle):
+        no still spell there, so a read would be wasted bus time.
         """
         hold = self._hold
         if hold is None:
             return
-        if not loads or not self._running.is_set() or self._direct_move:
+        if (
+            not loads or not self._running.is_set() or self._direct_move
+            or self._interpolation_frames > 0
+            or self._contact_now() - self._direct_move_ended < OFF_PLAYBACK_SETTLE_S
+        ):
             hold.discard()
             return
         if self._tick_lags is None:

@@ -425,8 +425,8 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       3 s pause với torque bật, có lượt học hay không, được lấy mẫu như pause thấy tay đèn
       bị ghim, bỏ 0,5 s đầu cho lag của lần di chuyển trước tắt, cho tải và lag của
       `base_pitch` / `elbow_pitch`. Đỉnh được giữ theo ô tư thế 5° x 5° (`base_pitch`,
-      `elbow_pitch`) và cập nhật như envelope học ngầm (2 quãng, lần đầu giảm 25 % khoảng
-      cách từ sàn cố định mỗi quãng, nặng hơn thì tăng ngay; quãng của lượt học, giữ 4 s
+      `elbow_pitch`) và cập nhật như envelope học ngầm (2 quãng, giảm 25 % khoảng cách từ
+      sàn cố định mỗi quãng nhưng không xuống dưới mức đã đo thật, nặng hơn thì tăng ngay; quãng của lượt học, giữ 4 s
       ở tư thế cuối mỗi recording, đặt thẳng giá trị ô). Trong pause các khớp này nhả ở
       đỉnh đã học (ô đó và các ô kề ±1) cộng margin của profile, và chỉ khi mức đó dưới
       sàn `off_playback` (với tải bị giới hạn thì dưới trần): tư thế chưa học, hoặc ô bị
@@ -487,11 +487,13 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       recording đó về phía chúng: giá trị tối đa từng frame khi chưa đủ 5 lần (lỏng
       nhất), đủ 5 lần thì giá trị lớn thứ hai, nên một lần bị tay chạm nhẹ không được
       tính. Giá trị cao hơn thay envelope ngay, nên một frame tải nặng chỉ làm dừng một
-      lần, tối đa tới 80 % của cut-off cho tải và 30° cho lag; giá trị thấp hơn chỉ giảm
-      một phần tư khoảng chênh mỗi lần, nên vài lần chạy lúc servo mát không làm đèn
-      quá nhạy. Envelope đầu tiên của một recording cũng giảm như vậy từ các sàn cố định
-      nó dùng trước đó (Lamp: sàn `load` của contact, rồi tải và lag `off_playback`, rồi
-      `torque_limit` của khớp bị giới hạn), nên nó bắt đầu đúng chỗ đèn đang đứng. Frame
+      lần, tối đa tới 80 % của cut-off cho tải và 30° cho lag. Giá trị đã đo thật (lần
+      chạy sạch hoặc lượt học; mức cao nhất từng frame lưu ở
+      `contact_profile.json.measured`) không bao giờ bị các lần chạy nhẹ hơn sau đó kéo
+      xuống. Chỉ phần nằm trên mức đó mới giảm, một phần tư khoảng chênh mỗi lần: envelope
+      đầu tiên của một recording, bắt đầu từ các sàn cố định nó dùng trước đó (Lamp: sàn
+      `load` của contact, rồi tải và lag `off_playback`, rồi `torque_limit` của khớp bị
+      giới hạn) nên bắt đầu đúng chỗ đèn đang đứng, và phần đã nâng vì dừng nhầm. Frame
       mà một lần chạy sau mới lấy mẫu lần đầu (lấy mẫu 20 Hz bỏ sót một số frame 30 fps
       mỗi lần) thì giảm từ giá trị đã học của các frame lân cận trong ±3 frame, để nó
       không giữ cả cửa sổ sàn ở mức sàn cố định. Lần
