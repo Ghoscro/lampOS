@@ -603,6 +603,9 @@ async def lifespan(app: FastAPI):
                     # No face (`expression`) = no express_emotion tool.
                     enable_expression=("expression" in _profile.capabilities),
                 )
+                from hal.drivers.voice.lang_id.gate import build_gate
+
+                state.voice_service.set_language_gate(build_gate(os_cfg.get("stt_language")))
                 if state._mic_muted:
                     # Muted: build the pipeline but don't open the mic.
                     logger.info("VoiceService created but NOT started -- mic muted")
@@ -1105,8 +1108,12 @@ def _contact_profile():
         return None
     from hal.config import CONTACT_PROFILE_PATH
     from hal.drivers.motors.contact_profile import ContactProfile
-    # Only what this unit learned (POST /servo/contact/learn); no shared default.
-    return ContactProfile.load(CONTACT_PROFILE_PATH, contact.profile_margin, contact.lag_margin)
+    # Only what this unit learned (a learn run or passively); no shared default. Saved
+    # with the torque caps it was learned under, and dropped when they change.
+    caps = json.dumps(_servo_overload_config.torque_limit or {}, sort_keys=True, separators=(",", ":"))
+    return ContactProfile.load(
+        CONTACT_PROFILE_PATH, contact.profile_margin, contact.lag_margin, signature="torque_limit=" + caps,
+    )
 
 
 def _on_servo_contact(joint: str, load: int) -> None:
