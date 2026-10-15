@@ -433,8 +433,8 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       3 s pause với torque bật, có lượt học hay không, được lấy mẫu như pause thấy tay đèn
       bị ghim, bỏ 0,5 s đầu cho lag của lần di chuyển trước tắt, cho tải và lag của
       `base_pitch` / `elbow_pitch`. Đỉnh được giữ theo ô tư thế 5° x 5° (`base_pitch`,
-      `elbow_pitch`) và cập nhật như envelope học ngầm (2 quãng, giảm 25 % khoảng cách từ
-      sàn cố định mỗi quãng nhưng không xuống dưới mức đã đo thật, nặng hơn thì tăng ngay; quãng của lượt học, giữ 4 s
+      `elbow_pitch`) và cập nhật như envelope học ngầm (2 quãng, giảm 50 % khoảng cách mỗi quãng, gấp đôi envelope vì đèn ít khi đứng yên đủ một pause, từ
+      sàn cố định nhưng không xuống dưới mức đã đo thật, nặng hơn thì tăng ngay; quãng của lượt học, giữ 4 s
       ở tư thế cuối mỗi recording, đặt thẳng giá trị ô). Trong pause các khớp này nhả ở
       đỉnh đã học cộng margin của profile, lấy đường bao của chính ô đó nâng theo mức đo
       thật của các ô kề ±1 (không lấy đường bao của ô kề: ô kề mới học một lần còn sát sàn
@@ -517,11 +517,15 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       `elbow_pitch` ở 30-45 % làm envelope bị nới mỗi lần pause, và một lần chạm trần 60 %
       đã đẩy cả kênh elbow của `idle` lên quá trần. Với lần dừng nhầm:
       envelope trong ±3 frame quanh đó tăng ngay tới mức mà mẫu đó không còn làm dừng,
-      tối đa 10 lần mỗi ngày cho mỗi recording, và không giảm trong 24 giờ sau đó. Khớp
-      bị giới hạn torque mà dừng đúng ở `torque_limit` (trong khoảng 1 %) thì tăng tới
-      mức trần trên toàn bộ recording, để khớp đó chỉ còn được canh bằng lag ở đó:
-      elbow của lamp-c0a4 chạm trần 60 % ở những frame `idle` khác nhau, và đã làm
-      `idle` dừng mỗi 5 giây với sàn 41 %. Cập nhật được lưu tối đa 1 phút một lần
+      tối đa 10 lần mỗi ngày cho mỗi recording, và chính các frame đó của kênh khớp đó
+      không giảm trong 24 giờ sau (giữ trong RAM, restart HAL là hết); mọi frame và kênh
+      khác vẫn giảm bình thường (trên lamp-75c9, khoá cả recording sau bốn lần dừng sớm
+      đã giữ cả năm khớp của `idle` sát sàn cố định suốt một ngày). Khớp bị giới hạn
+      torque mà dừng đúng ở `torque_limit` (trong khoảng 1 %) thì tăng tới mức trần
+      trong ±30 frame (1 s) quanh lần dừng, để đoạn đó chỉ còn được canh bằng lag:
+      elbow của lamp-c0a4 chạm trần ở những frame `idle` khác nhau giữa các lần chạy, và
+      đã làm `idle` dừng mỗi 5 giây với sàn 41 %. Cách cũ nâng cả kênh đã làm tải elbow
+      của `idle` trên lamp-75c9 không còn được canh ở frame nào. Cập nhật được lưu tối đa 1 phút một lần
       (ghi đè file, khoảng 100 KB mỗi lần). Envelope được lưu
       kèm `torque_limit` lúc học (`contact_profile.json.signature`); đổi `torque_limit`
       thì khi khởi động envelope bị bỏ và dùng các sàn cố định cho tới khi học lại
@@ -538,10 +542,12 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       `Torque_Limit` của từng servo (register 48 của STS3215) mỗi lần configure, nên khớp
       đó đẩy vào tay hay vật cản tối đa chỉ mạnh đến vậy. Khi đó `Present_Load` chạm trần ở
       mức giới hạn, nên một sàn load cao hơn nó (80 % của cut-off) không bao giờ trip trên
-      khớp đó. Lamp giới hạn `base_yaw`, `base_pitch` và `elbow_pitch` ở `600` (60 %): qua
-      19 recording trên lamp-52e6, trần 70 % đẩy độ trễ bám tệ nhất từ 17° lên 18°
-      (`shock`), 50 % kéo nó lên 24°; chọn 60 % để đẩy nhẹ hơn. `Present_Load` của ba khớp
-      này đứng ở 60 %, nên cut-off 80 % không bao giờ trip trên chúng — chính trần torque
+      khớp đó. Lamp giới hạn `base_yaw` và `base_pitch` ở `600` (60 %), `elbow_pitch` ở
+      `700` (70 %): qua 19 recording trên lamp-52e6, trần 70 % đẩy độ trễ bám tệ nhất từ
+      17° lên 18° (`shock`), 50 % kéo nó lên 24°; chọn 60 % để đẩy nhẹ hơn. Elbow của
+      lamp-75c9 tự chạm trần 60 % trong `idle` không ai chạm, nên tải của nó không còn phân
+      biệt được tay ở đó; vì vậy elbow dùng 70 %. `Present_Load` của ba khớp này đứng ở
+      trần, nên cut-off 80 % không bao giờ trip trên chúng — chính trần torque
       giới hạn lực đẩy của chúng; cut-off vẫn bảo vệ `wrist_roll` và `wrist_pitch`.
 - [x] **Quá tải servo (kẹt) → cắt torque, chime, thử lại theo giờ.** Bảo vệ bánh răng
       khi tay đèn bị chặn hoặc bị ép. Ở tầng driver, chỉ cho feetech

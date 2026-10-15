@@ -33,14 +33,18 @@ PASSIVE_FALL_SHARE = 0.25
 PASSIVE_CEILING_LAG = 300
 # A contact pause nobody held through (no torque release) reads as a false stop: the
 # envelope there rises at once to where that sample would not have stopped it, at
-# most this many times a day per recording, and does not fall for PASSIVE_HOLD_S
-# after. On a capped joint a stop at its cap (within PASSIVE_CAP_SLACK, 0.1 %) means
-# its load says nothing in that recording: lamp-c0a4's elbow reaches its 60 % cap at
-# varying idle frames, and stopped idle every 5 s on a 41 % floor. Its whole channel
-# rises to the cap there, leaving that joint to its lag.
+# most this many times a day per recording, and those frames of that channel do not
+# fall for PASSIVE_HOLD_S after. Only them: on lamp-75c9 four early idle stops held
+# all five joints of idle near their fixed floors for a day. On a capped joint a stop
+# at its cap (within PASSIVE_CAP_SLACK, 0.1 %) means its load says nothing around
+# there: lamp-c0a4's elbow reaches its cap at idle frames that vary from run to run,
+# and stopped idle every 5 s on a 41 % floor. The channel then rises to the cap over
+# PASSIVE_CAP_FRAMES either side (1 s at 30 fps), leaving that stretch to its lag;
+# where the load stays clear of the cap, the learned floor still stops it.
 PASSIVE_LOOSEN_PER_DAY = 10
 PASSIVE_HOLD_S = 86400.0
 PASSIVE_CAP_SLACK = 10
+PASSIVE_CAP_FRAMES = 30
 # A passive update is saved at most this often; the runs themselves stay in RAM.
 PASSIVE_SAVE_S = 60.0
 
@@ -235,6 +239,8 @@ class PassiveLearner:
         self._lock = threading.Lock()
         self._runs: Dict[str, List[Series]] = {}
         self._loosened: Dict[str, List[float]] = {}
+        # {recording: {channel: [(first frame, last frame, when)]}} a false stop raised.
+        self._held: Dict[str, Dict[str, List[Tuple[int, int, float]]]] = {}
         self._draft: Optional[Tuple[str, int, int, Series]] = None   # rec, total, reached, samples
         self._tainted = False
         self._dirty = False
@@ -291,14 +297,15 @@ class PassiveLearner:
         with self._lock:
             self._runs.pop(recording, None)
             self._loosened.pop(recording, None)
+            self._held.pop(recording, None)
             self._tainted = True
 
     def loosen(self, recording: str, frame: int, name: str, value: int) -> bool:
         """A stop at `frame` on `name` (sample `value`) that nobody held through.
 
-        Raises the envelope around that frame to where `value` would not have stopped
-        it, or the whole channel to the cap when a capped joint stopped at it. True when
-        it changed.
+        Raises that channel's envelope around that frame to where `value` would not have
+        stopped it, or to the cap over PASSIVE_CAP_FRAMES either side when a capped joint
+        stopped at it, and holds those frames up for PASSIVE_HOLD_S. True when it changed.
         """
         margin = self._margin(name)
         if margin is None:
@@ -316,12 +323,10 @@ class PassiveLearner:
             if not values:
                 return False
             needed = max(value, cap) if at_cap else value - margin + 1
-            frames = (
-                range(len(values)) if at_cap
-                else range(max(0, frame - WINDOW_FRAMES), min(len(values), frame + WINDOW_FRAMES + 1))
-            )
+            reach = PASSIVE_CAP_FRAMES if at_cap else WINDOW_FRAMES
+            first, last = max(0, frame - reach), min(len(values) - 1, frame + reach)
             changed = False
-            for i in frames:
+            for i in range(first, last + 1):
                 if values[i] is not None and values[i] < needed:
                     values[i] = needed
                     changed = True
@@ -329,10 +334,12 @@ class PassiveLearner:
                 return False
             self.profile.replace(recording, series)
             self._loosened[recording] = recent + [now]
+            held = self._held.setdefault(recording, {})
+            held[name] = [s for s in held.get(name, []) if now - s[2] < PASSIVE_HOLD_S] + [(first, last, now)]
             self._dirty = True
         logger.info(
-            "[contact] %s frame %d: stop nobody held, %s envelope raised%s",
-            recording, frame, name, " to its cap throughout" if at_cap else "",
+            "[contact] %s frame %d: stop nobody held, %s envelope raised over frames %d-%d%s",
+            recording, frame, name, first, last, " to its cap" if at_cap else "",
         )
         return True
 
@@ -353,7 +360,7 @@ class PassiveLearner:
         now = self._clock()
         old = self.profile.envelope(rec)
         measured = self.profile.measured(rec)
-        holding = any(now - t < PASSIVE_HOLD_S for t in self._loosened.get(rec, []))
+        held = self._held.get(rec, {})
         new: Series = {}
         real: Series = {}
         for name in set().union(*runs):
@@ -366,6 +373,7 @@ class PassiveLearner:
             start = self._start(name)
             before = old.get(name, [])
             known = measured.get(name, [])
+            spans = [(first, last) for first, last, t in held.get(name, []) if now - t < PASSIVE_HOLD_S]
             values: List[Optional[int]] = []
             highest: List[Optional[int]] = []
             for frame in range(total):
@@ -391,8 +399,10 @@ class PassiveLearner:
                     value = was
                 highest.append(value)
                 # Only what is above the measured (a fixed floor it starts from, a false
-                # stop's raise) falls, a share of the gap per update.
+                # stop's raise) falls, a share of the gap per update; not a false stop's
+                # frames while they are held.
                 if prior is not None and value < prior:
+                    holding = any(first <= frame <= last for first, last in spans)
                     value = prior if holding else prior - max(1, round((prior - value) * PASSIVE_FALL_SHARE))
                 values.append(value)
             new[name] = values

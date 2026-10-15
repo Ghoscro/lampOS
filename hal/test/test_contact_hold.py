@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 
 from hal.drivers.motors.contact_profile import ContactProfile
-from hal.drivers.motors.hold_profile import HOLD_SETTLE_S, HoldLearner
+from hal.drivers.motors.hold_profile import HOLD_FALL_SHARE, HOLD_SETTLE_S, HoldLearner
 from hal.drivers.motors.overload import OverloadGuard
 from hal.test.test_servo_overload import IDLE, JOINTS, _animation_service_cls, _Clock, _FakeRobot
 
@@ -44,15 +44,15 @@ def test_one_still_spell_is_not_enough(tmp_path):
     assert learner.floors(POSE) == {}
 
 
-def test_a_cell_falls_from_the_fixed_floor_a_quarter_of_the_gap(tmp_path):
+def test_a_cell_falls_from_the_fixed_floor_half_the_gap(tmp_path):
     learner, clock = _learner(tmp_path)
     _spell(learner, clock, _held())
     _spell(learner, clock, _held())
-    # base_pitch starts at 570 - 120 = 450 and falls 25 % of the way to 250.
-    assert learner.profile.envelope("2,2")["base_pitch"] == [400]
-    assert learner.floors(POSE)["base_pitch"] == 520
+    # base_pitch starts at 570 - 120 = 450 and falls half the way to 250.
+    assert learner.profile.envelope("2,2")["base_pitch"] == [350]
+    assert learner.floors(POSE)["base_pitch"] == 470
     # elbow: 600 cap - 120 = 480, toward 334.
-    assert learner.profile.envelope("2,2")["elbow_pitch"] == [480 - round(146 * 0.25)]
+    assert learner.profile.envelope("2,2")["elbow_pitch"] == [480 - round(146 * HOLD_FALL_SHARE)]
 
 
 def test_a_learn_run_sets_the_cell_outright(tmp_path):
@@ -283,7 +283,7 @@ def test_a_neighbour_raises_a_floor_by_what_it_measured_not_its_falling_envelope
     for _ in range(2):
         _spell(learner, clock, _held(pitch=176, elbow=86), trusted=True)
         _spell(learner, clock, _held(pitch=150, elbow=120), pose=near)   # passive: still falling
-    assert learner.profile.envelope("2,3")["elbow_pitch"][0] > 300
+    assert learner.profile.envelope("2,3")["elbow_pitch"][0] >= 300   # far over its 120
     assert learner.floors(POSE)["elbow_pitch"] == 120 + 120
     assert learner.floors(POSE)["base_pitch"] == 176 + 120
 

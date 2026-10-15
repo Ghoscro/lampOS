@@ -114,8 +114,9 @@ samples every joint's `Present_Load` at 20 Hz (`hal/drivers/motors/overload.py`)
   `off_playback` floor or the cut-off: they hold the arm's weight even untouched), releases torque instead, like the overload cut-off. On lamp-52e6 these joints peak at 52 % in free
   motion and a hand on `base_yaw` drives it to 94-100 %. `base_pitch` and `elbow_pitch`
   carry the arm's weight and reach 83-100 % in free motion, so they get no fixed floor;
-  they and `base_yaw` are capped at 60 % torque (`torque_limit`; 70 % cost the worst
-  recording, `shock`, 1° of extra lag, 50 % cost 7°).
+  they and `base_yaw` are capped at 60 % torque, `elbow_pitch` at 70 % (`torque_limit`;
+  70 % cost the worst recording, `shock`, 1° of extra lag, 50 % cost 7°; lamp-75c9's
+  elbow sat at 60 % in untouched `idle`).
 - **Learned envelope.** During playback every joint, the weight-bearing ones included,
   is held to what a free run loaded at that frame plus 12 % (`contact.profile_margin`),
   and to how far it trailed its goal there plus 3.5° (`contact.lag_margin`), which

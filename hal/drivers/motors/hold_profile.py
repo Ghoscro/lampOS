@@ -17,7 +17,7 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 from hal.drivers.motors.contact_profile import (
-    LAG_PREFIX, PASSIVE_CAP_SLACK, PASSIVE_FALL_SHARE, PASSIVE_MIN_RUNS, PASSIVE_RUNS,
+    LAG_PREFIX, PASSIVE_CAP_SLACK, PASSIVE_MIN_RUNS, PASSIVE_RUNS,
     PASSIVE_SAVE_S, ContactProfile,
 )
 
@@ -33,6 +33,11 @@ HOLD_STILL_DEG = 0.5
 # Skipped at the start of a spell: the last move's tracking lag dying out. Any 1 s a
 # release needs within the pause still overlaps what is sampled after it.
 HOLD_SETTLE_S = 0.5
+# Share of the gap one spell lowers a cell by, twice the motion envelope's: the lamp is
+# rarely still for a whole pause, and on lamp-75c9 its resting cell still released
+# base_pitch at 43 % after 7 min against the 21 % it measured. Never under what was
+# measured, so a faster fall only reaches the measured hold sooner.
+HOLD_FALL_SHARE = 0.5
 
 Cell = Tuple[int, int]
 
@@ -55,7 +60,7 @@ class HoldLearner:
     on and no contact stop or cut-off in it. Like the passive envelope: the last
     PASSIVE_RUNS spells of a cell are kept, from PASSIVE_MIN_RUNS on their max (second
     highest once the ring is full) updates the cell, a higher value at once, a lower
-    one by PASSIVE_FALL_SHARE of the gap, starting from the fixed floor (`defaults`).
+    one by HOLD_FALL_SHARE of the gap, starting from the fixed floor (`defaults`).
     A learn run's spells (`trusted`) set the cell outright, as its envelope does. A
     hand on a still arm only raises a cell, and a floor never exceeds the fixed one,
     so a bad sample can at worst leave the release where it was before this learned.
@@ -157,7 +162,7 @@ class HoldLearner:
                 prior = start
             # Only what is above the measured (the fixed floor it starts from) falls.
             if prior is not None and value < prior and not trusted:
-                value = prior - max(1, round((prior - value) * PASSIVE_FALL_SHARE))
+                value = prior - max(1, round((prior - value) * HOLD_FALL_SHARE))
             new[name] = [value]
         self.profile.replace(key, new)
         self.profile.replace_measured(key, real)

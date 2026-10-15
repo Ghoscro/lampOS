@@ -113,9 +113,9 @@ của mọi khớp ở 20 Hz (`hal/drivers/motors/overload.py`).
   `off_playback` hoặc cut-off, vì chúng gánh trọng lượng tay đèn kể cả khi không ai chạm), thì nhả torque như cut-off quá tải. Trên lamp-52e6 các khớp này đạt đỉnh 52 % khi chuyển động tự do, và lấy tay
   chặn `base_yaw` đẩy nó lên 94-100 %. `base_pitch` và `elbow_pitch` gánh trọng lượng
   tay đèn và lên 83-100 % khi chuyển động tự do, nên không có sàn cố định; chúng
-  (cùng `base_yaw`) bị giới hạn ở 60 % torque (`torque_limit`): trên lamp-52e6
-  trần 70 % làm recording tệ nhất (`shock`) trễ từ 17° lên 18°, 50 % lên 24°; 60 % cho
-  lực đẩy nhẹ hơn.
+  (cùng `base_yaw`) bị giới hạn ở 60 % torque, `elbow_pitch` ở 70 % (`torque_limit`):
+  trên lamp-52e6 trần 70 % làm recording tệ nhất (`shock`) trễ từ 17° lên 18°, 50 % lên
+  24°; 60 % cho lực đẩy nhẹ hơn; elbow của lamp-75c9 tự chạm 60 % trong `idle` không ai chạm.
 - **Envelope đã học.** Trong playback mọi khớp, kể cả các khớp gánh trọng lượng, bị giữ
   ở mức load mà một lượt chạy tự do đạt ở frame đó cộng 12 % (`contact.profile_margin`),
   và ở mức trễ so với goal tại đó cộng 3,5° (`contact.lag_margin`), nên vẫn thấy được
@@ -136,7 +136,7 @@ của mọi khớp ở 20 Hz (`hal/drivers/motors/overload.py`).
   Idle đã ổn định dùng envelope của chính máy nếu máy đã học idle, không thì `off_playback`.
 - **Cắt torque khi quá tải.** Khớp nào ở mức 80 % trở lên trong 1.5 s (tay đang giữ vẫn
   bị ép) sẽ cắt torque mọi servo, phát ack chime và chặn mọi lệnh ghi goal trong 120 s. Sau đó
-  thân máy resume vào idle từ vị trí tay đang nằm. Với trần 60 %, thực tế cut-off chỉ
+  thân máy resume vào idle từ vị trí tay đang nằm. Với trần 60-70 %, thực tế cut-off chỉ
   còn trip được trên `wrist_roll` và `wrist_pitch`.
 
 Frame recording gửi trong lúc goal bị chặn sẽ bị bỏ, không xếp hàng lại. Ngưỡng
