@@ -29,6 +29,7 @@ token is cached in a helper-owned file and never printed.
 On any failure nothing is written to stdout, so a following `| jq` sees empty
 input instead of an error body it could mistake for an empty result.
 """
+import base64
 import hashlib
 import json
 import mimetypes
@@ -61,6 +62,8 @@ OFFICIAL_HOSTS = {
     "notion": ("api.notion.com",),
     "linear": ("api.linear.app",),
     "asana": ("app.asana.com",),
+    # Narrowed per call to the linked environment's hosts (EBAY_HOSTS).
+    "ebay": ("api.ebay.com", "apiz.ebay.com", "api.sandbox.ebay.com", "apiz.sandbox.ebay.com"),
 }
 GOOGLE_CODES = ("gmail", "google_calendar", "google_drive")
 
@@ -76,7 +79,7 @@ DYNAMIC_HOST_CODES = {
 # no refresh token: the access token is short-lived (about a day) and the helper
 # mints a new one itself from the saved client credentials when needed. The token
 # request goes to the one stored account host, like every other call.
-CLIENT_CREDENTIAL_CODES = ("shopify",)
+CLIENT_CREDENTIAL_CODES = ("shopify", "ebay")
 TOKEN_RENEW_SKEW_SECONDS = 300          # renew when less than this is left
 MINT_TIMEOUT_SECONDS = 30
 MAX_MINT_RESPONSE_BYTES = 64 * 1024
@@ -85,6 +88,26 @@ MAX_MINTED_LIFETIME_SECONDS = 7 * 24 * 3600
 MINT_REJECTED_MESSAGE = (
     "{code}: the provider rejected the saved client ID/secret or the app is no longer installed — "
     "ask the user to reconnect {code} in the Autonomous app"
+)
+
+# eBay: the customer's own developer app (client ID + secret) plus a refresh
+# token for their seller account. The helper mints the short-lived access token
+# from the refresh token on the linked environment's API host; the stored
+# `api_key` is that refresh token and is never sent to an API endpoint.
+EBAY_HOSTS = {
+    "production": ("api.ebay.com", "apiz.ebay.com"),
+    "sandbox": ("api.sandbox.ebay.com", "apiz.sandbox.ebay.com"),
+}
+# Content-Language eBay expects on inventory/offer writes, per marketplace.
+EBAY_CONTENT_LANGUAGE = {
+    "EBAY_US": "en-US", "EBAY_MOTORS_US": "en-US", "EBAY_CA": "en-CA", "EBAY_GB": "en-GB",
+    "EBAY_AU": "en-AU", "EBAY_IE": "en-IE", "EBAY_DE": "de-DE", "EBAY_AT": "de-AT",
+    "EBAY_CH": "de-CH", "EBAY_FR": "fr-FR", "EBAY_IT": "it-IT", "EBAY_ES": "es-ES",
+    "EBAY_NL": "nl-NL", "EBAY_BE": "nl-BE", "EBAY_PL": "pl-PL",
+}
+EBAY_REFRESH_REJECTED_MESSAGE = (
+    "ebay: eBay rejected the saved refresh token (expired or revoked) — "
+    "ask the user to reconnect eBay in the Autonomous app"
 )
 
 # Connectors that present the token in their own header instead of
@@ -244,6 +267,15 @@ def cmd_info(code):
         if saved:
             info["auto_refresh"] = True
             info["expired"] = False  # an expired stored token is replaced on the next call
+    if code == "ebay":
+        if not ebay_refresh_token(entry):
+            info["client_credentials"] = "missing"
+            info["token_renewal"] = "none: reconnect eBay"
+            info["auto_refresh"] = False
+        else:
+            info["expires"] = "access tokens are minted when needed"
+        info["environment"] = ebay_environment(entry)
+        info["marketplace_id"] = ebay_marketplace(entry)
     print(json.dumps(info, indent=2))
     return 0
 
@@ -254,6 +286,19 @@ def client_credentials_of(entry):
     client_id = str(creds.get("client_id") or entry.get("client_id") or "").strip()
     client_secret = str(creds.get("client_secret") or "").strip()
     return client_id, client_secret
+
+
+def ebay_environment(entry):
+    env = str((entry.get("credentials") or {}).get("environment") or "production").strip().lower()
+    return env if env in EBAY_HOSTS else "production"
+
+
+def ebay_marketplace(entry):
+    return str((entry.get("credentials") or {}).get("marketplace_id") or "EBAY_US").strip().upper()
+
+
+def ebay_refresh_token(entry):
+    return str(entry.get("refresh_token") or entry.get("api_key") or "").strip()
 
 
 def credential_fingerprint(host, client_id):
@@ -349,6 +394,49 @@ def mint_token(code, host, client_id, client_secret):
     return token, int(time.time()) + lifetime
 
 
+def mint_ebay_token(host, client_id, client_secret, refresh_token):
+    """Exchange the saved eBay refresh token for a short-lived access token on
+    the linked environment's host. Returns (token, expires_at). Error messages
+    are fixed text: they never carry the client ID, a secret or the response body."""
+    basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    req = urllib.request.Request(
+        f"https://{host}/identity/v1/oauth2/token",
+        data=urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": refresh_token}).encode(),
+        method="POST",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
+            "Authorization": " ".join(("Basic", basic)),
+        },
+    )
+    try:
+        with _OPENER.open(req, timeout=MINT_TIMEOUT_SECONDS) as resp:
+            raw = resp.read(MAX_MINT_RESPONSE_BYTES)
+    except urllib.error.HTTPError as e:
+        try:
+            error = json.loads(e.read(MAX_MINT_RESPONSE_BYTES).decode("utf-8", "replace")).get("error")
+        except (ValueError, AttributeError):
+            error = None
+        if error == "invalid_grant":
+            raise Failure(3, EBAY_REFRESH_REJECTED_MESSAGE)
+        if e.code in (400, 401, 403):
+            raise Failure(3, MINT_REJECTED_MESSAGE.format(code="ebay"))
+        if 300 <= e.code < 400:
+            raise Failure(1, "ebay: the token request was redirected; not followed. Ask the user to reconnect ebay")
+        raise Failure(1, f"ebay: the token request failed (HTTP {e.code}); try again in a moment")
+    except (urllib.error.URLError, OSError):
+        raise Failure(1, "ebay: could not reach eBay to renew the token (network problem); try again in a moment")
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+        token = data["access_token"]
+        lifetime = int(data.get("expires_in") or DEFAULT_MINTED_LIFETIME_SECONDS)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise Failure(1, "ebay: eBay answered the token request with something unusable; try again in a moment")
+    if not isinstance(token, str) or not token:
+        raise Failure(1, "ebay: eBay answered the token request with something unusable; try again in a moment")
+    lifetime = max(60, min(lifetime, MAX_MINTED_LIFETIME_SECONDS))
+    return token, int(time.time()) + lifetime
+
+
 def obtain_token(code, entry, host, force=False):
     """The token to use for a call, and whether it was minted just now.
 
@@ -364,14 +452,20 @@ def obtain_token(code, entry, host, force=False):
 
     now = int(time.time())
     client_id, client_secret = client_credentials_of(entry)
-    can_mint = bool(client_id and client_secret)
-    fingerprint = credential_fingerprint(host, client_id) if client_id else None
+    ebay = code == "ebay"
+    can_mint = bool(client_id and client_secret) and (not ebay or bool(ebay_refresh_token(entry)))
+    fingerprint = None
+    if client_id:
+        # eBay: a relink (another seller on the same app) must not reuse a
+        # cached token, so the link time is part of what the cache belongs to.
+        fingerprint = credential_fingerprint(host, f"{client_id}\n{entry.get('obtained_at') or ''}" if ebay else client_id)
     if not force:
         candidates = []
         cached = read_token_cache(code, fingerprint, now) if fingerprint else None
         if cached:
             candidates.append(cached)
-        stored = entry.get("access_token") or entry.get("api_key")
+        # eBay's stored credential is the refresh token, never an access token.
+        stored = None if ebay else entry.get("access_token") or entry.get("api_key")
         stored_expiry = int(entry.get("expires_at") or 0)
         if stored and (stored_expiry == 0 or stored_expiry - now > TOKEN_RENEW_SKEW_SECONDS):
             candidates.append((stored, stored_expiry or float("inf")))
@@ -379,7 +473,10 @@ def obtain_token(code, entry, host, force=False):
             return max(candidates, key=lambda c: c[1])[0], False
     if not can_mint:
         raise Failure(3, f"{code}: the saved token has expired and no client ID/secret is saved — ask the user to reconnect {code} in the Autonomous app")
-    token, expires_at = mint_token(code, host, client_id, client_secret)
+    if ebay:
+        token, expires_at = mint_ebay_token(host, client_id, client_secret, ebay_refresh_token(entry))
+    else:
+        token, expires_at = mint_token(code, host, client_id, client_secret)
     write_token_cache(code, fingerprint, token, expires_at)
     return token, True
 
@@ -501,11 +598,20 @@ def cmd_call(code, method, url, args):
         host = stored_host(code, entry)
         if parsed.hostname != host:
             raise Failure(4, f"refusing to send the {code} credential to {parsed.hostname}; it only goes to the account it was linked to")
+    if code == "ebay":
+        env = ebay_environment(entry)
+        if parsed.hostname not in EBAY_HOSTS[env]:
+            raise Failure(4, f"refusing {parsed.hostname}: this eBay link is {env}; allowed: {', '.join(EBAY_HOSTS[env])}")
+        host = EBAY_HOSTS[env][0]  # where tokens are minted
     if code in GOOGLE_CODES and entry.get("auth_type") == "pat":
         raise Failure(3, f"{code}: linked with an app password; Google REST APIs reject it — use IMAP/SMTP (see SKILL.md)")
     token, fresh = obtain_token(code, entry, host)
     client_id, client_secret = client_credentials_of(entry) if code in CLIENT_CREDENTIAL_CODES else ("", "")
     can_mint = bool(client_id and client_secret)
+    # Every secret that must never reach the output.
+    secrets = [client_secret]
+    if code == "ebay":
+        secrets.append(ebay_refresh_token(entry))
 
     body = None
     content_type = None
@@ -539,6 +645,13 @@ def cmd_call(code, method, url, args):
                 headers[AUTH_HEADERS[code]] = token
             else:
                 headers["Authorization"] = " ".join(("Bearer", token))
+        if code == "ebay":
+            present = {k.strip().lower() for k in headers}
+            marketplace = ebay_marketplace(entry)
+            if "x-ebay-c-marketplace-id" not in present:
+                headers["X-EBAY-C-MARKETPLACE-ID"] = marketplace
+            if (body is not None or opts["form"]) and "content-language" not in present:
+                headers["Content-Language"] = EBAY_CONTENT_LANGUAGE.get(marketplace, "en-US")
         request_body = body
         if content_type:
             headers.setdefault("Content-Type", content_type)
@@ -559,7 +672,7 @@ def cmd_call(code, method, url, args):
             if 300 <= e.code < 400:
                 print("redirect not followed: the credential is only sent to the official host", file=sys.stderr)
             elif detail.strip():
-                print(scrub(detail, token, client_secret), file=sys.stderr)
+                print(scrub(detail, token, *secrets), file=sys.stderr)
             if e.code == 401:
                 expires = int(entry.get("expires_at") or 0)
                 print(
@@ -576,7 +689,7 @@ def cmd_call(code, method, url, args):
 
     text = out.decode("utf-8", "replace")
     if text:
-        sys.stdout.write(scrub(text, token, client_secret))
+        sys.stdout.write(scrub(text, token, *secrets))
         if not text.endswith("\n"):
             sys.stdout.write("\n")
     elif status == 204:

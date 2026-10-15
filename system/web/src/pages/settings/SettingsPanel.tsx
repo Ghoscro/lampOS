@@ -29,8 +29,9 @@ import { ScheduledSection } from "@/pages/settings/ScheduledSection";
 import { confirmWifiConnection, isWifiHandoffError } from "@/pages/settings/wifiReconnect";
 import { FacebookSection } from "@/pages/settings/FacebookSection";
 import { ShopifySection } from "@/pages/settings/ShopifySection";
+import { EbaySection } from "@/pages/settings/EbaySection";
 
-export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "privacy" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "led" | "scheduled" | "facebook" | "shopify";
+export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "privacy" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "led" | "scheduled" | "facebook" | "shopify" | "ebay";
 
 const SECTION_LABELS: Record<SettingsSectionId, string> = {
   device: "General",
@@ -52,6 +53,7 @@ const SECTION_LABELS: Record<SettingsSectionId, string> = {
   scheduled: "Scheduled",
   facebook: "Facebook",
   shopify: "Shopify",
+  ebay: "eBay",
 };
 
 function SkeletonBlock() {
@@ -654,7 +656,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeWebSearch,
   ]);
 
-  const showSave = activeSection !== "mcp" && activeSection !== "plugins" && activeSection !== "face" && activeSection !== "privacy" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "led" && activeSection !== "scheduled" && activeSection !== "facebook" && activeSection !== "shopify";
+  const showSave = activeSection !== "mcp" && activeSection !== "plugins" && activeSection !== "face" && activeSection !== "privacy" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "led" && activeSection !== "scheduled" && activeSection !== "facebook" && activeSection !== "shopify" && activeSection !== "ebay";
 
   return (
     <div className={`lm-fade-in lm-settings-panel${activeSection !== "device" ? " lm-settings-polished" : ""}`} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -865,6 +867,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
 
             <FacebookSection active={activeSection === "facebook"} />
             <ShopifySection active={activeSection === "shopify"} />
+            <EbaySection active={activeSection === "ebay"} />
 
             <MCPToolsSection active={activeSection === "mcp"} />
             <PluginsSection active={activeSection === "plugins"} />
