@@ -85,6 +85,14 @@ get `{"error": "busy"}`), and HAL backs off 2–30 s. Speaker embedding is not
 batched and is not limited this way. Knobs: `OVERLOAD__*` in
 [`configuration.md`](../integrations/perception-service/docs/configuration.md#overload-overload__).
 
+**Two-slot mode (optional).** A second dlserver slot can serve next to the first on
+the same GPU, turned on and off by hand (`make dlserver-two-slot`,
+`make dlserver-single`, `make dlserver-mode`). It needs about 9.7 GB more GPU memory,
+always runs the same code as the first slot, and a container restart returns to one
+slot. A deploy in two-slot mode drops to one slot, deploys, then restores both.
+lbserver skips a slot that refuses connections for 10 s. Details:
+[Two-slot mode](../integrations/perception-service/docs/deployment.md#two-slot-mode-optional).
+
 ## Using it from a device
 
 HAL is the main client. Point it at the backend with `DL_BACKEND_URL` and the

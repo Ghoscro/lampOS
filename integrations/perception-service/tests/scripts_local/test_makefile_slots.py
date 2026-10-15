@@ -69,3 +69,9 @@ def test_print_dlserver_pid_follows_state_file(tmp_path):
     )
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == f"{tmp_path}/dlserver-8002.pid"
+
+
+def test_default_port_uses_first_line_in_two_slot_mode(tmp_path):
+    (tmp_path / "dlserver-active").write_text("http://127.0.0.1:8002\nhttp://127.0.0.1:8001\n")
+    out = _dry(tmp_path, "stop-runpod-dlserver")
+    assert f"stop-tree.sh dlserver 8002 {tmp_path}/dlserver-8002-wrapper.pid " in out

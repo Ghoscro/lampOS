@@ -88,6 +88,14 @@ HAL lùi lại 2–30 s. Speaker embedding không đi qua batcher nên không b�
 kiểu này. Tham số: `OVERLOAD__*` trong
 [`configuration.md`](../../integrations/perception-service/docs/configuration.md#overload-overload__).
 
+**Chế độ hai slot (tùy chọn).** Có thể chạy thêm một slot dlserver thứ hai cạnh slot
+đầu trên cùng GPU, bật tắt bằng tay (`make dlserver-two-slot`, `make dlserver-single`,
+`make dlserver-mode`). Nó cần thêm khoảng 9.7 GB bộ nhớ GPU, luôn chạy cùng code với
+slot đầu, và khởi động lại container sẽ quay về một slot. Deploy khi đang ở chế độ hai
+slot sẽ về một slot, deploy, rồi bật lại cả hai. lbserver bỏ qua slot từ chối kết nối
+trong 10 s. Chi tiết:
+[Chế độ hai slot](../../integrations/perception-service/docs/deployment.md#two-slot-mode-optional).
+
 ## Thiết bị dùng nó thế nào
 
 HAL là client chính. Trỏ nó tới backend bằng `DL_BACKEND_URL` và `DL_API_KEY` dùng
