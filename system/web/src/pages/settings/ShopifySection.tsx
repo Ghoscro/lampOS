@@ -285,8 +285,8 @@ export function ShopifySection({ active }: { active: boolean }) {
                     <li><b>App URL</b> = <code>https://autonomous.ai</code> (any https address works)</li>
                     <li><b>Embed app in Shopify admin</b> = off</li>
                     <li>
-                      <b>Scopes</b> = <code>read_products, write_products, read_content, write_content, read_publications, write_publications, read_inventory, write_inventory, read_locations</code>{" "}
-                      (the publications scopes let the agent publish products to your Online Store; the inventory scopes let it set stock)
+                      <b>Scopes</b> = <code>read_products, write_products, read_content, write_content, read_publications, write_publications, read_inventory, write_inventory, read_locations, read_files, write_files</code>{" "}
+                      (the publications scopes let the agent publish products to your Online Store; the inventory scopes let it set stock; the files scopes let it upload images)
                     </li>
                     <li><b>Redirect URLs</b> can stay empty</li>
                   </ul>
@@ -327,7 +327,7 @@ export function ShopifySection({ active }: { active: boolean }) {
                     <li><b>"Missing or invalid client secret"</b> → copy the secret again (no spaces); if you regenerated it in Shopify, use the new one.</li>
                     <li>Rejected even though both look right → the app and the store must be in the same Shopify organization; create the app from the account that owns the store.</li>
                     <li>Domain rejected → it must end in <code>.myshopify.com</code> (not a custom domain, not an admin.shopify.com address).</li>
-                    <li>Can't publish products to a sales channel → add the <code>write_publications</code> scope, release a new version, approve the update.</li>
+                    <li>Can't publish products or upload images → add the <code>write_publications</code> and <code>write_files</code> scopes, release a new version, approve the update.</li>
                     <li>Tokens last 24 hours and your device renews them automatically; if you regenerate the secret in Shopify, connect again here with the new one.</li>
                   </ul>
                 </div>
