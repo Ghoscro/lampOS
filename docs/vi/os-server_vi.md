@@ -1047,6 +1047,26 @@ từng record.
   basic auth và không có spool: khi collector chậm/không hoạt động và queue đầy, record
   mới bị drop (có stderr notice rate-limit); log console và rotating file cục bộ vẫn
   tiếp tục. Khi shutdown, worker flush record trong queue tối đa năm giây.
+- **Dữ liệu người dùng ở lại trên thiết bị (GELF mặc định chặn).** Lời gọi log viết
+  như bình thường, console và file cục bộ nhận đầy đủ mọi record; chỉ bản gửi GELF
+  được lọc, ngay trong handler:
+  - Số, boolean, duration, time và lỗi được gửi. Bot token Telegram và query string
+    của URL trong text lỗi bị thay (`<redacted-token>`, `?<redacted>`).
+  - Chuỗi chỉ được gửi khi nằm dưới key kỹ thuật trong allowlist (`gelfSafeKeys` ở
+    `system/lib/logger/private.go`, `SAFE_KEYS` ở `hal/log_redact.py`): id, enum,
+    provider, model, version, cấu hình phần cứng và mạng. Mọi chuỗi khác thành
+    `<redacted N chars>`.
+  - Go: key là key của attribute `slog`, còn message `slog` được gửi nguyên văn
+    (test chặn message được dựng bằng lời gọi format). Dòng `log` chuẩn đến nơi đã
+    được format sẵn, nên chỉ tag `[component]` được gửi.
+  - HAL: handler đọc lời gọi log từ file source (HAL chạy từ source) để tách chữ cố
+    định và giá trị. Chữ cố định được gửi; mỗi giá trị của template `%`, f-string
+    hay chuỗi `+` được xét theo tên biểu thức truyền vào (`self.model`, `e`), hoặc
+    với biểu thức không có tên thì theo từ đứng trước (`provider=%s`). Message mà
+    source không cho thấy là literal sẽ thành `<redacted N chars>`.
+  - `logger.Private(...)` (Go) hoặc `private(...)` (HAL) che giá trị kể cả khi nằm
+    dưới key trong allowlist. Không bao giờ thêm vào allowlist một key có thể chứa
+    lời người dùng nói, danh tính của họ hay những gì thiết bị quan sát về họ.
 
 ## Local Intent Matching
 

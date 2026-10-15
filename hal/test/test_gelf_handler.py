@@ -174,7 +174,10 @@ def _use_scripted_requests(monkeypatch, statuses):
 
 
 def _record(msg):
-    return logging.LogRecord("hal", logging.ERROR, __file__, 1, msg, None, None)
+    # Report the caller's line, as a logger call would: GELF ships a message
+    # only when its call site shows it as a literal (hal/log_redact.py).
+    line = sys._getframe(1).f_lineno
+    return logging.LogRecord("hal", logging.ERROR, __file__, line, msg, None, None)
 
 
 def test_setup_logs_wait_in_the_spool_until_the_key_arrives(monkeypatch, tmp_path):
