@@ -408,8 +408,11 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       vẫn **giữ** tay đèn lâu chừng đó trong lúc tạm dừng — khớp vừa dừng vẫn ở sàn đã làm
       nó dừng trở lên (sàn tải hoặc lag của đường bao đã học nếu có) hoặc bị đẩy lệch 1° khỏi
       tư thế đã ghim (`CONTACT_RELEASE_LAG`), nếu khớp đó có sàn contact cố định, hoặc khớp
-      nào còn vượt sàn
-      contact cố định hay sàn tải/lag `off_playback` — thì không phải va chạm thoáng qua: driver log
+      có sàn cố định khác (`base_yaw`, hai khớp wrist) ở mức sàn mà lần dừng đó so với nó
+      (đường bao đã học tại đó, không cao hơn sàn cố định: trên lamp-75c9 tay giữ
+      `wrist_pitch` ở 32 % trên sàn đường bao 17 % trong khi `wrist_roll` làm dừng, và sàn
+      cố định 65 % giữ torque), hoặc khớp gánh trọng lượng vượt tải giữ đã học hay sàn
+      tải/lag `off_playback` — thì không phải va chạm thoáng qua: driver log
       `[contact] … releasing torque` và chuyển sang cắt torque như cut-off (tay đèn rũ,
       khoá `retry_s`, chime của cut-off). Chạm rồi buông trong khoảng đó thì chỉ tạm dừng.
       Sàn đã làm dừng quan trọng với đèn đã học: trên lamp-52e6 tay chặn `base_yaw` ở
@@ -428,7 +431,10 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       `elbow_pitch`) và cập nhật như envelope học ngầm (2 quãng, giảm 25 % khoảng cách từ
       sàn cố định mỗi quãng nhưng không xuống dưới mức đã đo thật, nặng hơn thì tăng ngay; quãng của lượt học, giữ 4 s
       ở tư thế cuối mỗi recording, đặt thẳng giá trị ô). Trong pause các khớp này nhả ở
-      đỉnh đã học (ô đó và các ô kề ±1) cộng margin của profile, và chỉ khi mức đó dưới
+      đỉnh đã học cộng margin của profile, lấy đường bao của chính ô đó nâng theo mức đo
+      thật của các ô kề ±1 (không lấy đường bao của ô kề: ô kề mới học một lần còn sát sàn
+      cố định nó đang giảm từ đó, và trên lamp-75c9 một ô như vậy giữ ngưỡng nhả elbow của
+      ô đã học ở 51 % trong khi ô đó đo được 21 %), và chỉ khi mức đó dưới
       sàn `off_playback` (với tải bị giới hạn thì dưới trần): tư thế chưa học, hoặc ô bị
       tay đẩy lên, vẫn theo sàn `off_playback` hoặc cut-off như trước. Lưu tối đa mỗi phút
       một lần vào `/var/lib/hal/contact_hold.json` (`HAL_CONTACT_HOLD_PATH`), bị bỏ như
@@ -497,8 +503,12 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       mà một lần chạy sau mới lấy mẫu lần đầu (lấy mẫu 20 Hz bỏ sót một số frame 30 fps
       mỗi lần) thì giảm từ giá trị đã học của các frame lân cận trong ±3 frame, để nó
       không giữ cả cửa sổ sàn ở mức sàn cố định. Lần
-      chạy nào bị trip không bao giờ được tính, nên một lần dừng do va chạm mà không ai
-      giữ qua hết thời gian pause (kết thúc mà không nhả torque) được coi là dừng nhầm:
+      chạy nào bị trip không bao giờ được tính, nên một lần dừng mà không ai chạm trong lúc
+      pause (kết thúc mà không nhả torque, và từ 0,5 s trở đi, `CONTACT_HELD_SETTLE_S`,
+      không khớp nào chạm ngưỡng nhả dù chỉ thoáng qua) được coi là dừng nhầm. Lần pause
+      có tay giữ nhưng chưa tới mức nhả thì envelope giữ nguyên: trên lamp-75c9 tay giữ
+      `elbow_pitch` ở 30-45 % làm envelope bị nới mỗi lần pause, và một lần chạm trần 60 %
+      đã đẩy cả kênh elbow của `idle` lên quá trần. Với lần dừng nhầm:
       envelope trong ±3 frame quanh đó tăng ngay tới mức mà mẫu đó không còn làm dừng,
       tối đa 10 lần mỗi ngày cho mỗi recording, và không giảm trong 24 giờ sau đó. Khớp
       bị giới hạn torque mà dừng đúng ở `torque_limit` (trong khoảng 1 %) thì tăng tới

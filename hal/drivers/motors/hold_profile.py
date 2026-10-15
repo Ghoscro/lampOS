@@ -167,7 +167,10 @@ class HoldLearner:
         """Release floors learned for this pose, each under its fixed one; {} when none.
 
         A channel counts only where its own cell learned it; its neighbours (±1 cell)
-        then raise it, the load changing across a cell's edge.
+        then raise it by what they actually measured, the load changing across a
+        cell's edge. Not by their envelope: a neighbour learned once still sits near the
+        fixed floor it falls from, and on lamp-75c9 one such cell held its learned
+        neighbour's elbow release at 51 % against the 21 % it had measured.
         """
         cell = _cell(pose)
         if cell is None:
@@ -183,7 +186,7 @@ class HoldLearner:
             peak = series[0]
             for dp in (-1, 0, 1):
                 for de in (-1, 0, 1):
-                    near = self.profile.envelope(_key((cell[0] + dp, cell[1] + de))).get(name)
+                    near = self.profile.measured(_key((cell[0] + dp, cell[1] + de))).get(name)
                     if near and near[0] is not None:
                         peak = max(peak, near[0])
             floor = peak + margin

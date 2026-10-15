@@ -106,7 +106,8 @@ của mọi khớp ở 20 Hz (`hal/drivers/motors/overload.py`).
   không phát âm thanh, và chặn lệnh ghi
   goal trong 3 s. Sau đó chạy tiếp vào idle từ tư thế
   đã dừng. Tay vẫn giữ tay đèn sau 1 s trong lúc dừng (`release_after_s`), tức khớp
-  vừa dừng vẫn ở sàn tải/lag đã làm nó dừng hoặc bị đẩy lệch 1° khỏi tư thế đã ghim (`base_pitch`/`elbow_pitch` theo tải và lag
+  vừa dừng vẫn ở sàn tải/lag đã làm nó dừng hoặc bị đẩy lệch 1° khỏi tư thế đã ghim, hoặc
+  `base_yaw`/khớp wrist khác ở mức sàn mà lần dừng đó so với nó (`base_pitch`/`elbow_pitch` theo tải và lag
   đã học khi giữ đứng yên ở tư thế đó cộng margin của profile, không thì sàn
   `off_playback` hoặc cut-off, vì chúng gánh trọng lượng tay đèn kể cả khi không ai chạm), thì nhả torque như cut-off quá tải. Trên lamp-52e6 các khớp này đạt đỉnh 52 % khi chuyển động tự do, và lấy tay
   chặn `base_yaw` đẩy nó lên 94-100 %. `base_pitch` và `elbow_pitch` gánh trọng lượng

@@ -58,6 +58,10 @@ OFF_PLAYBACK_SETTLE_S = 0.5
 # lamp-52e6 and lamp-a0ae, while a hand on it read 1.3-8.5 deg. Its load says less:
 # a0ae's base_yaw (P=16) held only 12-16 % under a hand, under its 18 % stopping floor.
 CONTACT_RELEASE_LAG = 10
+# Past this far into a contact pause (s), any joint at its release floor means a hand is
+# on the arm, even for less than release_after_s: that pause was no false stop, and the
+# envelope is not loosened for it. Before it the stop's own deceleration may still read.
+CONTACT_HELD_SETTLE_S = 0.5
 
 
 # Plays per recording a learn run allows before giving up on a full pass.
@@ -234,6 +238,10 @@ class AnimationService:
         self._contact_release_s = contact_release_s
         self._contact_hold: Optional[OverloadGuard] = None
         self._contact_hold_floors: Dict[str, int] = {}
+        # When the last contact stop began (contact clock), and whether a hand showed
+        # during its pause (see CONTACT_HELD_SETTLE_S).
+        self._contact_stop_t = 0.0
+        self._contact_touched = False
         # Learned holding load of base_pitch / elbow_pitch per pose, for that release.
         self._hold = (
             HoldLearner(
@@ -1248,11 +1256,23 @@ class AnimationService:
             if held:
                 self._contact_release(*held)
                 return
+            if (
+                not self._contact_touched
+                and contact._clock() - self._contact_stop_t >= CONTACT_HELD_SETTLE_S
+                and any(
+                    floor is not None and value >= floor
+                    for value, floor in (
+                        (value, self._contact_hold_floors.get(name, contact.threshold_for(name)))
+                        for name, value in samples.items()
+                    )
+                )
+            ):
+                self._contact_touched = True
         if contact is not None:
             samples, floors = self._contact_samples(loads)
             hit = contact.observe(samples, floors)
             if hit:
-                self._contact_stop(*hit)
+                self._contact_stop(*hit, floors=floors)
                 return
             if not contact.locked:
                 self._hold_observe(loads)
@@ -1534,8 +1554,14 @@ class AnimationService:
             time.sleep(0.05)
         return False
 
-    def _contact_stop(self, joint: str, load: int) -> None:
-        """Stop where the arm is and keep it there (torque ON) for the pause."""
+    def _contact_stop(self, joint: str, load: int, floors: Optional[Dict[str, int]] = None) -> None:
+        """Stop where the arm is and keep it there (torque ON) for the pause.
+
+        `floors` are the per-sample floors the stopping tick compared against (the
+        learned envelope at that frame, or off_playback), None for the fixed ones.
+        """
+        self._contact_stop_t = self._contact._clock()
+        self._contact_touched = False
         # Where it stopped, read before the halt ends playback: a pause nobody holds
         # through loosens the envelope there (_contact_recover).
         position = self._playback_position() if self._learning is None else None
@@ -1568,8 +1594,19 @@ class AnimationService:
             # one the envelope learned: untouched, lamp-a0ae's elbow_pitch held 33.4 %
             # after a 22.7 % stop and went limp even with a 10 % margin. Those release
             # on what they learned to hold still in this pose (HoldLearner), else on
-            # their off_playback floor or the cut-off.
+            # their off_playback floor or the cut-off. The other fixed-floor joints hold
+            # to the floors this stop compared them against too, never above their fixed
+            # ones: on lamp-75c9 a hand held wrist_pitch at 32 % while wrist_roll had
+            # stopped the arm, under a 17 % envelope floor, and the fixed 65 % kept it on.
             self._contact_hold_floors = dict(self._contact_off_playback)
+            for name, stopped_on in (floors or {}).items():
+                motor = name[len(LAG_PREFIX):] if name.startswith(LAG_PREFIX) else name
+                if self._contact.threshold_for(motor) is None:
+                    continue   # Weight-bearing: its hold, below, not its motion envelope.
+                for known in (self._contact_hold_floors.get(name), self._contact.threshold_for(name)):
+                    if known is not None:
+                        stopped_on = min(stopped_on, known)
+                self._contact_hold_floors[name] = stopped_on
             if self._hold is not None and current:
                 pose = {key.removesuffix(".pos"): value for key, value in current.items()}
                 for name, learned in self._hold.floors(pose).items():
@@ -1617,8 +1654,12 @@ class AnimationService:
         if self.overload_active:
             # The cut-off took over meanwhile; its own recovery unblocks the goals.
             return
-        if stop_at is not None and self._passive is not None:
-            # Nobody held it through the pause: most likely a false stop.
+        touched, self._contact_touched = self._contact_touched, False
+        if touched:
+            # A hand was on it, short of the release: the stop was right, keep the envelope.
+            held += " — held, not a false stop"
+        elif stop_at is not None and self._passive is not None:
+            # Nobody touched it through the pause: most likely a false stop.
             self._passive.loosen(*stop_at)
         with self.bus_lock:
             if self.robot:

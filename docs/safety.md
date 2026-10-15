@@ -429,8 +429,11 @@ Six conditions are enforced today; setup-incomplete is reserved.
       long into the pause — the stopped joint still at or above the floor that stopped
       it (its learned envelope load or lag floor when one applied) or pushed 1° off its
       pinned pose (`CONTACT_RELEASE_LAG`), if that joint has a fixed contact floor, or any
-      joint past its fixed
-      contact floor or `off_playback` load/lag floor — is not a bump: the driver logs `[contact] … releasing torque` and
+      other fixed-floor joint (`base_yaw`, the wrists) at the floor that stop compared it
+      against (its learned envelope there, never above its fixed floor: on lamp-75c9 a
+      hand held `wrist_pitch` at 32 % under a 17 % envelope floor while `wrist_roll` had
+      stopped the arm, and the fixed 65 % kept it on), or a weight-bearing joint past its
+      learned hold or `off_playback` load/lag floor — is not a bump: the driver logs `[contact] … releasing torque` and
       hands over to the cut-off's torque-off (arm goes limp, `retry_s` lockout, the
       cut-off's chime). A bump let go within the window only pauses. The stopping floor
       matters on a learned unit: on lamp-52e6 a hand stopped `base_yaw` at 39.6 % (envelope
@@ -448,8 +451,10 @@ Six conditions are enforced today; setup-incomplete is reserved.
       updated like the passive envelope (2 spells, falling 25 % of the gap per spell from
       the fixed floor but never under a hold once measured, a heavier one rising at once; a learn run's spells,
       held 4 s at each recording's end pose, set the cell outright). In a pause these
-      joints release at the learned peak (the cell and its ±1 neighbours) plus the profile
-      margins, and only where that is under their `off_playback` floor (and, for a
+      joints release at the learned peak plus the profile margins, the cell's own
+      envelope raised by what its ±1 neighbours actually measured (not their envelopes:
+      a neighbour learned once still sits near the fixed floor it falls from, and on
+      lamp-75c9 one held a learned cell's elbow release at 51 % against its 21 %), and only where that is under their `off_playback` floor (and, for a
       capped load, under the cap): an unlearned pose, or a cell a hand raised, keeps the
       `off_playback` floor or the cut-off as before. Saved at most once a minute to
       `/var/lib/hal/contact_hold.json` (`HAL_CONTACT_HOLD_PATH`), dropped like the
@@ -520,8 +525,12 @@ Six conditions are enforced today; setup-incomplete is reserved.
       the first time (20 Hz sampling skips some 30 fps frames on each run) falls from
       its learned neighbours within ±3 frames instead, so it does not hold its whole
       floor window up at the fixed floor. A run that trips never
-      counts, so a contact pause nobody holds through (it ends without a torque
-      release) is taken as a false stop instead: the envelope within ±3 frames of it
+      counts, so a contact pause nobody touches (it ends without a torque release, and
+      from 0.5 s in, `CONTACT_HELD_SETTLE_S`, no joint reached its release floor even
+      briefly) is taken as a false stop instead. A pause a hand held short of a release
+      leaves the envelope alone: on lamp-75c9 hands holding `elbow_pitch` at 30-45 %
+      loosened it at every pause, and one at its 60 % cap lifted `idle`'s whole elbow
+      channel past the cap. For a false stop the envelope within ±3 frames of it
       rises at once to where that sample would not have stopped it, at most 10 times
       a day per recording, and does not come down for 24 h after. A capped joint
       stopped at its `torque_limit` (within 1 %) rises to the cap across the whole

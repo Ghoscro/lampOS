@@ -1178,3 +1178,29 @@ def test_a_stop_held_into_a_torque_release_leaves_the_envelope(passive_rig):
     assert passive_rig.svc.overload_active
     passive_rig.svc._contact_recover()
     assert passive_rig.profile.envelope("stretching")["base_pitch"][4] == 300
+
+
+def test_a_hand_on_the_arm_short_of_a_release_is_no_false_stop(passive_rig):
+    """lamp-75c9: hands held elbow_pitch at 30-45 % under its release floor; each pause
+    loosened the envelope, and one at its 60 % cap lifted idle's whole elbow channel."""
+    passive_rig.svc._contact_release_s = 5.0        # past the pause: never releases here
+    _stop_on_envelope(passive_rig)
+    passive_rig.clock.advance(0.6)
+    passive_rig.bus.loads = {**IDLE, "base_pitch": 960}
+    passive_rig.svc._overload_tick()                 # a moment over its floor, then let go
+    passive_rig.bus.loads = dict(IDLE)
+    passive_rig.clock.advance(2.4)
+    passive_rig.svc._overload_tick()
+    assert not passive_rig.svc.contact_active
+    assert passive_rig.profile.envelope("stretching")["base_pitch"][4] == 300
+
+
+def test_the_stop_itself_settling_is_not_taken_for_a_hand(passive_rig):
+    passive_rig.svc._contact_release_s = 5.0
+    _stop_on_envelope(passive_rig)
+    passive_rig.bus.loads = {**IDLE, "base_pitch": 960}
+    passive_rig.svc._overload_tick()                 # still decelerating, inside the settle
+    passive_rig.bus.loads = dict(IDLE)
+    passive_rig.clock.advance(3.0)
+    passive_rig.svc._overload_tick()
+    assert passive_rig.profile.envelope("stretching")["base_pitch"][4] == 500 - 150 + 1

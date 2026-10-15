@@ -274,3 +274,38 @@ def test_a_lighter_spell_does_not_lower_a_measured_hold(tmp_path):
         _spell(learner, clock, _held(pitch=150, elbow=200))
     assert learner.floors(POSE)["base_pitch"] == 250 + 120
     assert learner.floors(POSE)["elbow_pitch"] == 334 + 120
+
+
+def test_a_neighbour_raises_a_floor_by_what_it_measured_not_its_falling_envelope(tmp_path):
+    """lamp-75c9: 6,6 learned once still sat at 39 % elbow and held 6,5's release at 51 %."""
+    learner, clock = _learner(tmp_path)
+    near = {**POSE, "elbow_pitch": 15.0}
+    for _ in range(2):
+        _spell(learner, clock, _held(pitch=176, elbow=86), trusted=True)
+        _spell(learner, clock, _held(pitch=150, elbow=120), pose=near)   # passive: still falling
+    assert learner.profile.envelope("2,3")["elbow_pitch"][0] > 300
+    assert learner.floors(POSE)["elbow_pitch"] == 120 + 120
+    assert learner.floors(POSE)["base_pitch"] == 176 + 120
+
+
+def test_every_fixed_floor_joint_releases_on_the_floor_it_was_stopped_against(hold_rig, monkeypatch):
+    """lamp-75c9: wrist_roll stopped the arm; a hand held wrist_pitch at 32 % over its 17 % floor."""
+    svc = hold_rig.svc
+    learned = {"base_yaw": 210, "wrist_roll": 216, "wrist_pitch": 171}
+    monkeypatch.setattr(svc, "_contact_samples", lambda loads: (loads, learned))
+    hold_rig.bus.loads = {**IDLE, "wrist_roll": 224}
+    _ticks(hold_rig, 0.15)
+    assert svc.contact_active
+    assert svc._contact_hold_floors["wrist_pitch"] == 171
+    assert svc._contact_hold_floors["base_yaw"] == 210
+    hold_rig.bus.loads = {**IDLE, "wrist_pitch": 321}
+    _ticks(hold_rig, 0.7)
+    assert svc.overload_active
+
+
+def test_a_learned_floor_never_lifts_a_release_over_the_fixed_one(hold_rig, monkeypatch):
+    svc = hold_rig.svc
+    monkeypatch.setattr(svc, "_contact_samples", lambda loads: (loads, {"wrist_roll": 216, "wrist_pitch": 720}))
+    hold_rig.bus.loads = {**IDLE, "wrist_roll": 224}
+    _ticks(hold_rig, 0.15)
+    assert svc._contact_hold_floors["wrist_pitch"] == 650
