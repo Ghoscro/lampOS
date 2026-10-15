@@ -319,6 +319,8 @@ FIRE_HAZARD_CONFIDENCE_THRESHOLD = float(os.environ.get("HAL_FIRE_HAZARD_CONFIDE
 FIRE_HAZARD_OVERLAP_THRESHOLD = float(os.environ.get("HAL_FIRE_HAZARD_OVERLAP_THRESHOLD", "0.2"))
 # A safe box holding at least this share of a flammable box (sofa, rug, blanket) is a room, not a container.
 FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO = float(os.environ.get("HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO", "0.8"))
+# ...and only when that flammable box is at least this share of the safe box (a cushion on the hearth is not).
+FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_MIN_SIZE = float(os.environ.get("HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_MIN_SIZE", "0.05"))
 FIRE_HAZARD_CONFIRM_S = float(os.environ.get("HAL_FIRE_HAZARD_CONFIRM_S", "10.0"))
 # Re-alert pace for the SAME steady hazard; new types alert immediately.
 FIRE_HAZARD_DEDUP_WINDOW_S = float(os.environ.get("HAL_FIRE_HAZARD_DEDUP_WINDOW_S", "1800.0"))

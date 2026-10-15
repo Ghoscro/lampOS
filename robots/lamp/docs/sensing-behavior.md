@@ -313,8 +313,10 @@ For each flame box HAL computes two scores. The **safe score** is the share of t
 box inside a safe object, so a small box on a big fire (a candle on one flame column)
 cannot excuse it. The **flammable score** is the shared area ÷ the smaller of the flame
 box and the flammable object. A safe object that holds at least
-`HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO` (0.8) of a flammable box is ignored: a
-"fireplace" box around a sofa is a burning room, not a fireplace. The flame becomes
+`HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO` (0.8) of a flammable box is ignored when
+that flammable box is at least `HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_MIN_SIZE` (0.05) of
+the safe object's area: a "fireplace" box around a sofa is a burning room, not a
+fireplace, while a cushion on the hearth is too small to count. The flame becomes
 `safe_fire` when the safe score beats the flammable score and is above
 `HAL_FIRE_HAZARD_OVERLAP_THRESHOLD` (0.2); `hazard_fire` when the flammable score is at
 least as high and above 0.2; otherwise `unsure_fire`.

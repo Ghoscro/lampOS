@@ -313,8 +313,10 @@ Với mỗi box lửa HAL tính hai điểm. **Điểm an toàn** là phần box
 toàn, nên một box nhỏ trên đám cháy lớn (một cây nến trên một cột lửa) không thể "bao
 che" cho cả đám cháy. **Điểm dễ cháy** là diện tích chung ÷ box nhỏ hơn giữa box lửa và vật
 dễ cháy. Vật an toàn chứa ít nhất `HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO` (0.8) của một
-box dễ cháy bị bỏ qua: một box "lò sưởi" bao quanh ghế sofa là cả căn phòng đang cháy, không
-phải lò sưởi. Lửa thành `safe_fire` khi điểm an toàn lớn hơn điểm dễ cháy và trên
+box dễ cháy bị bỏ qua khi box dễ cháy đó chiếm ít nhất
+`HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_MIN_SIZE` (0.05) diện tích vật an toàn: một box "lò
+sưởi" bao quanh ghế sofa là cả căn phòng đang cháy, không phải lò sưởi, còn một cái gối trên
+bệ lò sưởi thì quá nhỏ để tính. Lửa thành `safe_fire` khi điểm an toàn lớn hơn điểm dễ cháy và trên
 `HAL_FIRE_HAZARD_OVERLAP_THRESHOLD` (0.2); thành `hazard_fire` khi điểm dễ cháy ít nhất ngang
 bằng và trên 0.2; còn lại là `unsure_fire`.
 

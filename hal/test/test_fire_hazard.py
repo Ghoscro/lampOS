@@ -523,6 +523,16 @@ def test_assess_container_with_rug_partly_inside_stays_safe():
     ) == ["safe_fire"]
 
 
+def test_assess_small_cushion_on_hearth_keeps_fireplace():
+    # A cushion fully inside the fireplace box but ~3 % of its area is an object on the hearth,
+    # not a sign that the "fireplace" is a whole room.
+    assert _assess(
+        fire=[(0.5, 0.4, 0.2, 0.2)],
+        safe=[(0.5, 0.45, 0.4, 0.4)],
+        flammable=[(0.6, 0.6, 0.08, 0.06)],
+    ) == ["safe_fire"]
+
+
 def test_assess_zero_area_flammable_does_not_crash():
     assert _assess(
         fire=[(0.5, 0.4, 0.2, 0.2)],

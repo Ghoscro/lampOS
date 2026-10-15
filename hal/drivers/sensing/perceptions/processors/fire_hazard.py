@@ -293,11 +293,16 @@ class RemoteFireHazardDetector:
 
         if n_safe > 0 and n_flammable > 0:
             # A "fireplace" holding most of a sofa, rug or blanket is a burning room seen through
-            # a doorway, not a container, so it cannot excuse the fire (#717).
+            # a doorway, not a container, so it cannot excuse the fire (#717). A small object on
+            # the hearth (a cushion, a log basket) does not count.
             held = bbox_intersection(
                 safe_bboxes[:, None, :], flammable_bboxes[None, :, :]
             ) / bbox_area(flammable_bboxes[None, :, :])
-            safe_bboxes = safe_bboxes[~(held >= config.FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO).any(axis=-1)]
+            size = bbox_area(flammable_bboxes[None, :, :]) / bbox_area(safe_bboxes[:, None, :])
+            room = (held >= config.FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO) & (
+                size >= config.FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_MIN_SIZE
+            )
+            safe_bboxes = safe_bboxes[~room.any(axis=-1)]
             n_safe = safe_bboxes.shape[0]
 
         if n_flammable > 0:
