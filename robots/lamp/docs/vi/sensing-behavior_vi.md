@@ -294,18 +294,31 @@ server trả 400 (không biết preset), HAL gửi lại chính frame đó kèm 
 field này và trả 200 với class mặc định của nó, nên HAL sẽ không thấy lửa; HAL ghi một
 cảnh báo duy nhất khi reply của preset không chứa prompt nào của nó. Vì vậy phải deploy
 server trước bản HAL gửi preset. Các file prompt của HAL
-(`resources/{fire,smoke,flammable,safe}_classes.txt`) phải khớp từng dòng với preset của
-server (`hal/test/test_fire_hazard_preset_parity.py`).
+(`resources/{fire,smoke,flammable,safe}_classes.txt`) phải chứa đúng 46 prompt như preset
+của server, thứ tự không quan trọng (`hal/test/test_fire_hazard_preset_parity.py`). Server
+không biết cách nhóm: OWLv2 trả về đúng chuỗi prompt khớp nhất và HAL tự xếp nhóm, nên
+chuyển một prompt giữa các file của HAL không cần đổi gì trên server.
 
 Lời gọi chạy trên worker thread riêng của perception, không chiếm pool camera dùng chung,
 với timeout `HAL_FIRE_HAZARD_API_TIMEOUT_S` (15 s). Tối đa một lời gọi đang chạy; lượt
 kiểm tra đến hạn trong lúc đó bị bỏ qua.
 
 Detection dưới `HAL_FIRE_HAZARD_CONFIDENCE_THRESHOLD` (0.3) bị bỏ. Mỗi box khói thành
-`smoke`. Mỗi box lửa thành `safe_fire` khi nó chồng lên một vật an toàn (lò sưởi, nến, bếp
-gas, …) nhiều hơn mọi vật dễ cháy và mức chồng đó trên `HAL_FIRE_HAZARD_OVERLAP_THRESHOLD`
-(0.2); thành `hazard_fire` khi nó chồng lên vật dễ cháy ít nhất ngang bằng và trên 0.2;
-còn lại là `unsure_fire`.
+`smoke`. Box lửa là các prompt lửa: flame, bonfire, campfire và torch. OWLv2 hay gán nhãn
+`bonfire` cho một đám cháy lớn thật, nên các nhãn này được tính là chính ngọn lửa, không
+bao giờ là vật chứa an toàn. Vật an toàn chỉ là vật chứa lửa (lò sưởi, chậu lửa, hố lửa,
+nến, bếp gas, …).
+
+Với mỗi box lửa HAL tính hai điểm. **Điểm an toàn** là phần box lửa nằm trong một vật an
+toàn, nên một box nhỏ trên đám cháy lớn (một cây nến trên một cột lửa) không thể "bao
+che" cho cả đám cháy. **Điểm dễ cháy** là diện tích chung ÷ box nhỏ hơn giữa box lửa và vật
+dễ cháy. Vật an toàn chứa ít nhất `HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO` (0.8) của một
+box dễ cháy bị bỏ qua khi box dễ cháy đó chiếm ít nhất
+`HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_MIN_SIZE` (0.05) diện tích vật an toàn: một box "lò
+sưởi" bao quanh ghế sofa là cả căn phòng đang cháy, không phải lò sưởi, còn một cái gối trên
+bệ lò sưởi thì quá nhỏ để tính. Lửa thành `safe_fire` khi điểm an toàn lớn hơn điểm dễ cháy và trên
+`HAL_FIRE_HAZARD_OVERLAP_THRESHOLD` (0.2); thành `hazard_fire` khi điểm dễ cháy ít nhất ngang
+bằng và trên 0.2; còn lại là `unsure_fire`.
 
 **Lời gọi lỗi.** Timeout, lỗi mạng, reply khác 200, reply không đọc được, mã hóa không
 dùng được hoặc đang tạm dừng vì 429 đều là "không có quan sát": streak và escalation giữ

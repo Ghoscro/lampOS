@@ -294,17 +294,32 @@ older than the preset ignores the field and answers 200 with its own default cla
 HAL would see no fire; HAL logs a one-time warning when a preset reply names none of its
 prompts. That is why the server must be deployed before a HAL build that sends the
 preset. HAL's prompt files (`resources/{fire,smoke,flammable,safe}_classes.txt`) must
-match the server preset line for line (`hal/test/test_fire_hazard_preset_parity.py`).
+hold the same 46 prompts as the server preset, in any order
+(`hal/test/test_fire_hazard_preset_parity.py`). The server never sees the grouping:
+OWLv2 returns the matching prompt text and HAL buckets it, so moving a prompt between
+HAL files needs no server change.
 
 The call runs on the perception's own single worker thread, not the shared camera
 pool, with a `HAL_FIRE_HAZARD_API_TIMEOUT_S` (15 s) timeout. At most one call is in
 flight; a check that comes due while one is in flight is skipped.
 
 Detections below `HAL_FIRE_HAZARD_CONFIDENCE_THRESHOLD` (0.3) are dropped. Each smoke
-box becomes `smoke`. Each flame box becomes `safe_fire` when it overlaps a safe object
-(fireplace, candle, gas stove, …) more than any flammable object and that overlap is above
-`HAL_FIRE_HAZARD_OVERLAP_THRESHOLD` (0.2); `hazard_fire` when it overlaps a flammable
-object at least as much and above 0.2; otherwise `unsure_fire`.
+box becomes `smoke`. Flame boxes are the fire prompts: flame, bonfire, campfire and torch.
+OWLv2 often labels a large real fire `bonfire`, so these count as the fire itself, never
+as a safe container. Safe objects are containers only (fireplace, fire bowl, fire pit,
+candle, gas stove, …).
+
+For each flame box HAL computes two scores. The **safe score** is the share of the flame
+box inside a safe object, so a small box on a big fire (a candle on one flame column)
+cannot excuse it. The **flammable score** is the shared area ÷ the smaller of the flame
+box and the flammable object. A safe object that holds at least
+`HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_RATIO` (0.8) of a flammable box is ignored when
+that flammable box is at least `HAL_FIRE_HAZARD_SAFE_HOLDS_FLAMMABLE_MIN_SIZE` (0.05) of
+the safe object's area: a "fireplace" box around a sofa is a burning room, not a
+fireplace, while a cushion on the hearth is too small to count. The flame becomes
+`safe_fire` when the safe score beats the flammable score and is above
+`HAL_FIRE_HAZARD_OVERLAP_THRESHOLD` (0.2); `hazard_fire` when the flammable score is at
+least as high and above 0.2; otherwise `unsure_fire`.
 
 **Failed calls.** A timeout, network error, non-200 reply, unreadable reply, unavailable
 encryption or a 429 pause is "no observation": streaks and escalation stay as they were.

@@ -17,18 +17,23 @@ Options for `call`:
   --json BODY        JSON request body; `-` reads it from stdin
   --data K=V         form field, sent application/x-www-form-urlencoded (repeatable)
   --form K=V         multipart field; `K=@/path` uploads a file (repeatable)
-  --header K:V       extra request header (repeatable; Authorization is refused)
+  --header K:V       extra request header (repeatable; the credential header is refused)
   --token-param NAME send the credential as query parameter NAME instead of a
                      header (repeatable; only for endpoints that reject the header)
 
 Exit codes: 0 success (2xx) · 1 HTTP error or network failure · 2 usage error ·
 3 not connected / unusable credential · 4 host not allowed for this connector.
+Connectors linked with a client ID and secret (Shopify) get a fresh short-lived
+token minted for them when the stored one is missing or about to expire; that
+token is cached in a helper-owned file and never printed.
 On any failure nothing is written to stdout, so a following `| jq` sees empty
 input instead of an error body it could mistake for an empty result.
 """
+import hashlib
 import json
 import mimetypes
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -58,6 +63,35 @@ OFFICIAL_HOSTS = {
     "asana": ("app.asana.com",),
 }
 GOOGLE_CODES = ("gmail", "google_calendar", "google_drive")
+
+# Connectors whose API host is per account, not per provider. The credential may
+# only go to the one host stored when the account was linked, never to a family
+# of hosts: code -> (credential key holding the host, pattern a valid host must
+# match in full).
+DYNAMIC_HOST_CODES = {
+    "shopify": ("shop", re.compile(r"[a-z0-9][a-z0-9-]*\.myshopify\.com")),
+}
+
+# Connectors linked with the customer's own app (client ID + client secret) and
+# no refresh token: the access token is short-lived (about a day) and the helper
+# mints a new one itself from the saved client credentials when needed. The token
+# request goes to the one stored account host, like every other call.
+CLIENT_CREDENTIAL_CODES = ("shopify",)
+TOKEN_RENEW_SKEW_SECONDS = 300          # renew when less than this is left
+MINT_TIMEOUT_SECONDS = 30
+MAX_MINT_RESPONSE_BYTES = 64 * 1024
+DEFAULT_MINTED_LIFETIME_SECONDS = 3600  # when the response omits expires_in
+MAX_MINTED_LIFETIME_SECONDS = 7 * 24 * 3600
+MINT_REJECTED_MESSAGE = (
+    "{code}: the provider rejected the saved client ID/secret or the app is no longer installed — "
+    "ask the user to reconnect {code} in the Autonomous app"
+)
+
+# Connectors that present the token in their own header instead of
+# `Authorization: Bearer`. The raw token is sent, without a scheme prefix.
+AUTH_HEADERS = {
+    "shopify": "X-Shopify-Access-Token",
+}
 
 # Connectors whose API only accepts the credential as a query parameter on
 # some endpoints (Facebook feed-post DELETE, debug_token).
@@ -107,11 +141,31 @@ def load_entry(code):
     return ((data or {}).get("connectors") or {}).get(code)
 
 
+def stored_host(code, entry):
+    """The single API host a per-account connector may be called on, taken from
+    the entry stored at link time. Raises when it is missing or malformed so the
+    credential is never sent to a host the helper cannot vouch for."""
+    key, pattern = DYNAMIC_HOST_CODES[code]
+    creds = entry.get("credentials") or {}
+    host = creds.get(key)
+    if not host:
+        try:
+            host = (json.loads(creds.get("connector_vars") or "{}") or {}).get(key)
+        except (ValueError, AttributeError):
+            host = None
+    host = str(host or "").strip().lower()
+    if not pattern.fullmatch(host):
+        raise Failure(3, f"{code}: the linked account has no valid {key} stored — ask the user to reconnect it in the Autonomous app")
+    return host
+
+
 def account_of(entry):
     creds = entry.get("credentials") or {}
+    if creds.get("shop"):
+        return creds["shop"]
     if entry.get("auth_type") == "pat" and creds.get("email"):
         return creds["email"]
-    return entry.get("user_email") or creds.get("email") or ""
+    return entry.get("user_email") or creds.get("email") or creds.get("shop") or ""
 
 
 def cmd_list():
@@ -158,6 +212,7 @@ def describe(code, entry):
 def cmd_info(code):
     entry = load_entry(code)
     if not entry:
+        drop_token_cache(code)
         raise Failure(3, f"{code}: not connected")
     expires = int(entry.get("expires_at") or 0)
     info = {
@@ -173,8 +228,160 @@ def cmd_info(code):
     page_id = (entry.get("credentials") or {}).get("page_id")
     if page_id:
         info["page_id"] = page_id
+    if code in DYNAMIC_HOST_CODES:
+        try:
+            info[DYNAMIC_HOST_CODES[code][0]] = stored_host(code, entry)
+        except Failure as e:
+            info["problem"] = str(e)
+    if code in CLIENT_CREDENTIAL_CODES:
+        client_id, client_secret = client_credentials_of(entry)
+        saved = bool(client_id and client_secret)
+        info["client_credentials"] = "saved" if saved else "missing"
+        info["token_renewal"] = (
+            "automatic: the helper mints a new token when needed" if saved
+            else "none: reconnect when the token expires"
+        )
+        if saved:
+            info["auto_refresh"] = True
+            info["expired"] = False  # an expired stored token is replaced on the next call
     print(json.dumps(info, indent=2))
     return 0
+
+
+def client_credentials_of(entry):
+    """The saved client ID and secret of a connector linked with its own app."""
+    creds = entry.get("credentials") or {}
+    client_id = str(creds.get("client_id") or entry.get("client_id") or "").strip()
+    client_secret = str(creds.get("client_secret") or "").strip()
+    return client_id, client_secret
+
+
+def credential_fingerprint(host, client_id):
+    """Identifies which account and app a cached token belongs to. It covers the
+    host and client ID only; the secret is never hashed or stored by the helper."""
+    return hashlib.sha256(f"{host}\n{client_id}".encode()).hexdigest()
+
+
+def token_cache_path(code):
+    return CONFIGS_DIR / f"{code}.token.json"
+
+
+def read_token_cache(code, fingerprint, now):
+    """A still-valid cached token for exactly this account and app, else None."""
+    try:
+        data = load_json(token_cache_path(code))
+    except Failure:
+        return None  # a damaged cache is just a miss
+    if not isinstance(data, dict) or data.get("fingerprint") != fingerprint:
+        return None
+    token = data.get("access_token")
+    try:
+        expires_at = int(data.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(token, str) or not token or expires_at - now <= TOKEN_RENEW_SKEW_SECONDS:
+        return None
+    return token, expires_at
+
+
+def write_token_cache(code, fingerprint, token, expires_at):
+    """Atomically write the helper-owned token cache (mode 0600). The entry file
+    the device software manages is never touched. A failure here only costs an
+    extra token request next time, so it is swallowed."""
+    path = token_cache_path(code)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    payload = json.dumps({
+        "fingerprint": fingerprint, "access_token": token,
+        "expires_at": int(expires_at), "obtained_at": int(time.time()),
+    })
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(payload)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def drop_token_cache(code):
+    """Forget a cached token once its connector is gone."""
+    if code in CLIENT_CREDENTIAL_CODES:
+        try:
+            token_cache_path(code).unlink()
+        except OSError:
+            pass
+
+
+def mint_token(code, host, client_id, client_secret):
+    """Ask the account's own host for a new short-lived token with the saved
+    client credentials. Returns (token, expires_at). Error messages are fixed
+    text: they never carry the client ID, the secret or the response body."""
+    body = urllib.parse.urlencode({
+        "grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret,
+    }).encode()
+    req = urllib.request.Request(
+        f"https://{host}/admin/oauth/access_token", data=body, method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+    )
+    try:
+        with _OPENER.open(req, timeout=MINT_TIMEOUT_SECONDS) as resp:
+            raw = resp.read(MAX_MINT_RESPONSE_BYTES)
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 401, 403):
+            raise Failure(3, MINT_REJECTED_MESSAGE.format(code=code))
+        if 300 <= e.code < 400:
+            raise Failure(1, f"{code}: the token request was redirected; not followed. Ask the user to reconnect {code}")
+        raise Failure(1, f"{code}: the token request failed (HTTP {e.code}); try again in a moment")
+    except (urllib.error.URLError, OSError):
+        raise Failure(1, f"{code}: could not reach the provider to renew the token (network problem); try again in a moment")
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+        token = data["access_token"]
+        lifetime = int(data.get("expires_in") or DEFAULT_MINTED_LIFETIME_SECONDS)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise Failure(1, f"{code}: the provider answered the token request with something unusable; try again in a moment")
+    if not isinstance(token, str) or not token:
+        raise Failure(1, f"{code}: the provider answered the token request with something unusable; try again in a moment")
+    lifetime = max(60, min(lifetime, MAX_MINTED_LIFETIME_SECONDS))
+    return token, int(time.time()) + lifetime
+
+
+def obtain_token(code, entry, host, force=False):
+    """The token to use for a call, and whether it was minted just now.
+
+    Connectors with saved client credentials use, in order: a valid cached
+    token, a valid stored token, else a freshly minted one (always minted when
+    `force` is set, after the provider rejected the one in use). Every other
+    connector just uses its stored credential."""
+    if code not in CLIENT_CREDENTIAL_CODES:
+        token = entry.get("access_token") or entry.get("api_key")
+        if not token:
+            raise Failure(3, f"{code}: linked but no usable credential stored")
+        return token, False
+
+    now = int(time.time())
+    client_id, client_secret = client_credentials_of(entry)
+    can_mint = bool(client_id and client_secret)
+    fingerprint = credential_fingerprint(host, client_id) if client_id else None
+    if not force:
+        candidates = []
+        cached = read_token_cache(code, fingerprint, now) if fingerprint else None
+        if cached:
+            candidates.append(cached)
+        stored = entry.get("access_token") or entry.get("api_key")
+        stored_expiry = int(entry.get("expires_at") or 0)
+        if stored and (stored_expiry == 0 or stored_expiry - now > TOKEN_RENEW_SKEW_SECONDS):
+            candidates.append((stored, stored_expiry or float("inf")))
+        if candidates:
+            return max(candidates, key=lambda c: c[1])[0], False
+    if not can_mint:
+        raise Failure(3, f"{code}: the saved token has expired and no client ID/secret is saved — ask the user to reconnect {code} in the Autonomous app")
+    token, expires_at = mint_token(code, host, client_id, client_secret)
+    write_token_cache(code, fingerprint, token, expires_at)
+    return token, True
 
 
 def host_allowed(code, host):
@@ -277,9 +484,9 @@ def cmd_call(code, method, url, args):
         raise Failure(4, f"refusing {url!r}: only https:// URLs are allowed")
     if parsed.username is not None or parsed.password is not None or parsed.port not in (None, 443):
         raise Failure(4, f"refusing {url!r}: no user info or custom port in the URL")
-    if code not in OFFICIAL_HOSTS:
+    if code not in OFFICIAL_HOSTS and code not in DYNAMIC_HOST_CODES:
         raise Failure(4, f"{code}: the helper has no official API host for this connector — use its MCP tools if it has them")
-    if not host_allowed(code, parsed.hostname):
+    if code in OFFICIAL_HOSTS and not host_allowed(code, parsed.hostname):
         allowed = ", ".join(OFFICIAL_HOSTS[code])
         raise Failure(4, f"refusing to send the {code} credential to {parsed.hostname}; allowed: {allowed}")
     if opts["token_param"] and code not in TOKEN_PARAM_CODES:
@@ -287,66 +494,89 @@ def cmd_call(code, method, url, args):
 
     entry = load_entry(code)
     if not entry:
+        drop_token_cache(code)
         raise Failure(3, f"{code}: not connected — ask the user to link it in the Autonomous app")
+    host = None
+    if code in DYNAMIC_HOST_CODES:
+        host = stored_host(code, entry)
+        if parsed.hostname != host:
+            raise Failure(4, f"refusing to send the {code} credential to {parsed.hostname}; it only goes to the account it was linked to")
     if code in GOOGLE_CODES and entry.get("auth_type") == "pat":
         raise Failure(3, f"{code}: linked with an app password; Google REST APIs reject it — use IMAP/SMTP (see SKILL.md)")
-    token = entry.get("access_token") or entry.get("api_key")
-    if not token:
-        raise Failure(3, f"{code}: linked but no usable credential stored")
-
-    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True) + opts["query"]
-    for name in opts["token_param"]:
-        query.append((name, token))
-    full_url = urllib.parse.urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(query), "")
-    )
-
-    headers = {"Accept": "application/json"}
-    for k, v in opts["header"]:
-        if k.lower() in ("authorization", "host", "proxy-authorization", "cookie"):
-            raise Failure(2, f"do not pass {k}; the helper sets it (or it is not allowed)")
-        headers[k] = v
-    if not opts["token_param"]:
-        headers["Authorization"] = " ".join(("Bearer", token))
+    token, fresh = obtain_token(code, entry, host)
+    client_id, client_secret = client_credentials_of(entry) if code in CLIENT_CREDENTIAL_CODES else ("", "")
+    can_mint = bool(client_id and client_secret)
 
     body = None
+    content_type = None
     if opts["json"] is not None:
         body = opts["json"].encode()
-        headers.setdefault("Content-Type", "application/json")
+        content_type = "application/json"
     elif opts["data"]:
         body = urllib.parse.urlencode(opts["data"]).encode()
-        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
-    elif opts["form"]:
-        body, headers["Content-Type"] = multipart(opts["form"])
+        content_type = "application/x-www-form-urlencoded"
+    forbidden = {"authorization", "host", "proxy-authorization", "cookie"} | {h.lower() for h in AUTH_HEADERS.values()}
+    for k, v in opts["header"]:
+        if any(c in k + v for c in "\r\n\0"):
+            raise Failure(2, f"refusing header {k!r}: line breaks are not allowed in a header")
+        if k.strip().lower() in forbidden:
+            raise Failure(2, f"do not pass {k}; the helper sets it (or it is not allowed)")
 
-    req = urllib.request.Request(full_url, data=body, method=method, headers=headers)
-    try:
-        with _OPENER.open(req, timeout=TIMEOUT_SECONDS) as resp:
-            out = resp.read(MAX_RESPONSE_BYTES)
-            status = resp.status
-    except urllib.error.HTTPError as e:
-        detail = e.read(MAX_RESPONSE_BYTES).decode("utf-8", "replace")
-        print(f"HTTP {e.code} from {parsed.hostname}", file=sys.stderr)
-        if 300 <= e.code < 400:
-            print("redirect not followed: the credential is only sent to the official host", file=sys.stderr)
-        elif detail.strip():
-            print(scrub(detail, token), file=sys.stderr)
-        if e.code == 401:
-            expires = int(entry.get("expires_at") or 0)
-            print(
-                f"credential: expires {fmt_time(expires) if expires else 'never'}, "
-                f"auto_refresh={'yes' if entry.get('refresh_token') and entry.get('refresh') else 'no'}",
-                file=sys.stderr,
-            )
-        return 1
-    except (urllib.error.URLError, OSError) as e:
-        reason = getattr(e, "reason", e)
-        print(f"request to {parsed.hostname} failed: {type(reason).__name__}", file=sys.stderr)
-        return 1
+    # One extra attempt is allowed, only for connectors whose token the helper
+    # can mint, and only when a token it did not just mint is rejected (401).
+    for attempt in range(2):
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True) + opts["query"]
+        for name in opts["token_param"]:
+            query.append((name, token))
+        full_url = urllib.parse.urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(query), "")
+        )
+        headers = {"Accept": "application/json"}
+        for k, v in opts["header"]:
+            headers[k] = v
+        if not opts["token_param"]:
+            if code in AUTH_HEADERS:
+                headers[AUTH_HEADERS[code]] = token
+            else:
+                headers["Authorization"] = " ".join(("Bearer", token))
+        request_body = body
+        if content_type:
+            headers.setdefault("Content-Type", content_type)
+        elif opts["form"]:
+            request_body, headers["Content-Type"] = multipart(opts["form"])
+
+        req = urllib.request.Request(full_url, data=request_body, method=method, headers=headers)
+        try:
+            with _OPENER.open(req, timeout=TIMEOUT_SECONDS) as resp:
+                out = resp.read(MAX_RESPONSE_BYTES)
+                status = resp.status
+        except urllib.error.HTTPError as e:
+            detail = e.read(MAX_RESPONSE_BYTES).decode("utf-8", "replace")
+            if e.code == 401 and can_mint and not fresh and attempt == 0:
+                token, fresh = obtain_token(code, entry, host, force=True)
+                continue
+            print(f"HTTP {e.code} from {parsed.hostname}", file=sys.stderr)
+            if 300 <= e.code < 400:
+                print("redirect not followed: the credential is only sent to the official host", file=sys.stderr)
+            elif detail.strip():
+                print(scrub(detail, token, client_secret), file=sys.stderr)
+            if e.code == 401:
+                expires = int(entry.get("expires_at") or 0)
+                print(
+                    f"credential: expires {fmt_time(expires) if expires else 'never'}, "
+                    f"auto_refresh={'yes' if (entry.get('refresh_token') and entry.get('refresh')) or client_secret else 'no'}",
+                    file=sys.stderr,
+                )
+            return 1
+        except (urllib.error.URLError, OSError) as e:
+            reason = getattr(e, "reason", e)
+            print(f"request to {parsed.hostname} failed: {type(reason).__name__}", file=sys.stderr)
+            return 1
+        break
 
     text = out.decode("utf-8", "replace")
     if text:
-        sys.stdout.write(scrub(text, token))
+        sys.stdout.write(scrub(text, token, client_secret))
         if not text.endswith("\n"):
             sys.stdout.write("\n")
     elif status == 204:
@@ -354,11 +584,13 @@ def cmd_call(code, method, url, args):
     return 0
 
 
-def scrub(text, token):
-    if not token:
-        return text
-    for form in {token, urllib.parse.quote(token, safe=""), urllib.parse.quote_plus(token)}:
-        text = text.replace(form, "[credential]")
+def scrub(text, *secrets):
+    """Replace every secret (and its URL-encoded forms) with a placeholder."""
+    for secret in secrets:
+        if not secret:
+            continue
+        for form in {secret, urllib.parse.quote(secret, safe=""), urllib.parse.quote_plus(secret)}:
+            text = text.replace(form, "[credential]")
     return text
 
 

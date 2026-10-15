@@ -13,6 +13,9 @@ from unittest.mock import patch
 
 SCRIPT = Path(__file__).parents[1] / 'scripts/connector.py'
 TOKEN = 'tok-' + 'x' * 40
+CLIENT_ID = 'cid-' + 'a' * 12
+CLIENT_SECRET = 'shpss_' + 'z' * 32
+MINTED = 'minted-' + 'm' * 30
 
 
 def load_module(configs_dir):
@@ -38,16 +41,13 @@ class FakeResponse:
         return False
 
 
-class ConnectorHelperTests(unittest.TestCase):
+class HelperTestCase(unittest.TestCase):
+    """A temporary configs folder and a freshly loaded helper module."""
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.dir = Path(self.temp.name)
-        self.write('google_calendar', {
-            'auth_type': 'oauth', 'access_token': TOKEN, 'refresh_token': 'r', 'refresh': True,
-            'expires_at': int(time.time()) + 3600, 'user_email': 'me@example.com',
-            'scopes': ['https://www.googleapis.com/auth/calendar.events'],
-        })
         self.mod = load_module(self.dir)
 
     def write(self, code, entry):
@@ -58,6 +58,16 @@ class ConnectorHelperTests(unittest.TestCase):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = self.mod.main(list(argv))
         return code, out.getvalue(), err.getvalue()
+
+
+class ConnectorHelperTests(HelperTestCase):
+    def setUp(self):
+        super().setUp()
+        self.write('google_calendar', {
+            'auth_type': 'oauth', 'access_token': TOKEN, 'refresh_token': 'r', 'refresh': True,
+            'expires_at': int(time.time()) + 3600, 'user_email': 'me@example.com',
+            'scopes': ['https://www.googleapis.com/auth/calendar.events'],
+        })
 
     def test_list_names_connector_without_secret(self):
         code, out, _ = self.run_main('list')
@@ -187,6 +197,135 @@ class ConnectorHelperTests(unittest.TestCase):
         req = self.mod.urllib.request.Request('https://www.googleapis.com/x', headers={'Authorization': 'Bearer ' + TOKEN})
         self.assertIsNone(handler.redirect_request(req, None, 302, 'Found', {}, 'https://attacker.example/'))
 
+    # --- Shopify: per-account host, own auth header ---
+
+    SHOP = 'my-shop.myshopify.com'
+
+    def link_shopify(self, **credentials):
+        # The shape the device software stores for a customer-app connector: a
+        # PAT-style entry holding a minted token plus the client credentials.
+        credentials.setdefault('client_id', CLIENT_ID)
+        credentials.setdefault('client_secret', CLIENT_SECRET)
+        self.write('shopify', {
+            'auth_type': 'pat', 'access_token': TOKEN,
+            'expires_at': int(time.time()) + 3600, 'scopes': ['write_products'],
+            'credentials': credentials,
+        })
+
+    def test_shopify_sends_raw_token_in_shopify_header_to_stored_shop(self):
+        self.link_shopify(shop=self.SHOP)
+        seen = {}
+
+        def fake_urlopen(req, timeout):
+            seen['url'] = req.full_url
+            seen['token'] = req.get_header('X-shopify-access-token')
+            seen['auth'] = req.get_header('Authorization')
+            seen['body'] = req.data
+            return FakeResponse('{"data": {}}')
+
+        with patch.object(self.mod._OPENER, 'open', fake_urlopen):
+            code, out, _ = self.run_main(
+                'call', 'shopify', 'POST', 'https://%s/admin/api/2025-10/graphql.json' % self.SHOP,
+                '--json', '{"query": "{ shop { name } }"}')
+        self.assertEqual(code, 0)
+        self.assertEqual(seen['token'], TOKEN)
+        self.assertIsNone(seen['auth'])
+        self.assertEqual(seen['url'], 'https://%s/admin/api/2025-10/graphql.json' % self.SHOP)
+        self.assertEqual(json.loads(out), {'data': {}})
+
+    def test_shopify_host_comes_from_connector_vars_when_shop_key_is_absent(self):
+        self.link_shopify(connector_vars=json.dumps({'shop': self.SHOP}))
+        with patch.object(self.mod._OPENER, 'open', lambda req, timeout: FakeResponse('{}')):
+            code, _, _ = self.run_main('call', 'shopify', 'GET', 'https://%s/admin/api/2025-10/shop.json' % self.SHOP)
+        self.assertEqual(code, 0)
+
+    def test_shopify_refuses_other_shop_and_other_hosts(self):
+        self.link_shopify(shop=self.SHOP)
+        for url in (
+            'https://other-shop.myshopify.com/admin/api/2025-10/graphql.json',  # another store
+            'https://myshopify.com/admin',                                      # the bare family domain
+            'https://%s.evil.example/x' % self.SHOP,                            # lookalike
+            'https://evil.example/%s' % self.SHOP,
+            'https://admin.shopify.com/store/my-shop',                          # a real Shopify host that is not the stored shop
+        ):
+            with self.subTest(url=url), patch.object(self.mod._OPENER, 'open') as urlopen:
+                code, _, err = self.run_main('call', 'shopify', 'GET', url)
+                self.assertEqual(code, 4)
+                self.assertNotIn(TOKEN, err)
+                urlopen.assert_not_called()
+
+    def test_shopify_without_a_valid_stored_shop_is_unusable(self):
+        for credentials in ({}, {'shop': ''}, {'shop': 'evil.example.com'}, {'shop': 'a.myshopify.com.evil.example'},
+                            {'shop': 'a/b.myshopify.com'}, {'connector_vars': 'not json'}):
+            with self.subTest(credentials=credentials):
+                self.link_shopify(**credentials)
+                with patch.object(self.mod._OPENER, 'open') as urlopen:
+                    code, _, err = self.run_main('call', 'shopify', 'GET', 'https://my-shop.myshopify.com/admin/api/2025-10/shop.json')
+                self.assertEqual(code, 3)
+                self.assertIn('reconnect', err)
+                urlopen.assert_not_called()
+
+    def test_shopify_not_connected(self):
+        code, _, err = self.run_main('call', 'shopify', 'GET', 'https://my-shop.myshopify.com/admin/api/2025-10/shop.json')
+        self.assertEqual(code, 3)
+        self.assertIn('not connected', err)
+
+    def test_shopify_refuses_caller_supplied_credential_header(self):
+        self.link_shopify(shop=self.SHOP)
+        for header in ('X-Shopify-Access-Token: stolen', 'x-shopify-access-token: stolen', 'X-Shopify-Access-Token : stolen',
+                       'Authorization: Bearer x'):
+            with self.subTest(header=header), patch.object(self.mod._OPENER, 'open') as urlopen:
+                code, _, err = self.run_main('call', 'shopify', 'GET', 'https://%s/admin/api/2025-10/shop.json' % self.SHOP,
+                                             '--header', header)
+                self.assertEqual(code, 2)
+                self.assertIn('do not pass', err)
+                self.assertNotIn('stolen', err)
+                urlopen.assert_not_called()
+
+    def test_header_injection_is_refused(self):
+        for header in ('X-Note: ok\r\nX-Evil: 1', 'X-Note\nX-Evil: 1'):
+            with self.subTest(header=header), patch.object(self.mod._OPENER, 'open') as urlopen:
+                code, _, err = self.run_main('call', 'google_calendar', 'GET', 'https://www.googleapis.com/x',
+                                             '--header', header)
+                self.assertEqual(code, 2)
+                self.assertIn('line breaks', err)
+                urlopen.assert_not_called()
+
+    def test_shopify_info_and_list_show_shop_without_secret(self):
+        self.link_shopify(shop=self.SHOP)
+        code, out, _ = self.run_main('info', 'shopify')
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)['shop'], self.SHOP)
+        self.assertNotIn(TOKEN, out)
+        code, out, _ = self.run_main('list')
+        self.assertEqual(code, 0)
+        self.assertIn('shopify: connected (%s, pat)' % self.SHOP, out)
+        self.assertNotIn(CLIENT_SECRET, out)
+        self.assertNotIn(TOKEN, out)
+
+    def test_shopify_info_flags_missing_shop(self):
+        self.link_shopify()
+        code, out, _ = self.run_main('info', 'shopify')
+        self.assertEqual(code, 0)
+        self.assertIn('problem', json.loads(out))
+        self.assertNotIn('shop', json.loads(out))
+
+    def test_shopify_error_body_never_echoes_token(self):
+        # No saved client credentials: the helper cannot mint a replacement, so
+        # the 401 is reported as is.
+        self.link_shopify(shop=self.SHOP, client_id='', client_secret='')
+
+        def fake_urlopen(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, 401, 'Unauthorized', {},
+                                         io.BytesIO(('{"errors":"bad token %s"}' % TOKEN).encode()))
+
+        with patch.object(self.mod._OPENER, 'open', fake_urlopen):
+            code, out, err = self.run_main('call', 'shopify', 'GET', 'https://%s/admin/api/2025-10/shop.json' % self.SHOP)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, '')
+        self.assertNotIn(TOKEN, err)
+        self.assertIn('[credential]', err)
+
     def test_upload_refuses_credentials_and_non_media(self):
         token_file = self.dir / 'google_calendar_access_tokens.json'
         alias = self.dir / 'innocent.jpg'
@@ -212,6 +351,352 @@ class ConnectorHelperTests(unittest.TestCase):
         self.assertIn(b'filename="pic.jpg"', body)
         self.assertIn(b'\xff\xd8data', body)
         self.assertIn(b'name="message"\r\n\r\nhi', body)
+
+
+class ShopifyClientCredentialsTests(HelperTestCase):
+    """The customer's own app: the helper mints short-lived tokens itself."""
+
+    SHOP = 'my-shop.myshopify.com'
+    API = 'https://my-shop.myshopify.com/admin/api/2025-10/graphql.json'
+
+    def link(self, token=TOKEN, expires_in=3600, shop=None, client_id=CLIENT_ID, client_secret=CLIENT_SECRET, **extra):
+        credentials = {'shop': shop if shop is not None else self.SHOP}
+        if client_id:
+            credentials['client_id'] = client_id
+        if client_secret:
+            credentials['client_secret'] = client_secret
+        credentials.update(extra)
+        entry = {'auth_type': 'pat', 'access_token': token, 'credentials': credentials,
+                 'expires_at': int(time.time()) + expires_in if token else 0}
+        self.write('shopify', entry)
+
+    def cache_file(self):
+        return self.dir / 'shopify.token.json'
+
+    def opener(self, mint=None, api=None):
+        """A fake network: records every request and answers token requests with
+        `mint` and API calls with `api` (each a callable, an exception or a body)."""
+        calls = {'mint': [], 'api': []}
+
+        def respond(handler, req):
+            if isinstance(handler, BaseException):
+                raise handler
+            if callable(handler):
+                return handler(req)
+            return FakeResponse(handler)
+
+        def fake_open(req, timeout):
+            if req.full_url.endswith('/admin/oauth/access_token'):
+                calls['mint'].append(req)
+                return respond(mint if mint is not None else json.dumps({'access_token': MINTED, 'expires_in': 86399}), req)
+            calls['api'].append(req)
+            return respond(api if api is not None else '{"data": {}}', req)
+
+        return calls, fake_open
+
+    def call(self, fake_open, url=None, *extra):
+        with patch.object(self.mod._OPENER, 'open', fake_open):
+            return self.run_main('call', 'shopify', 'POST', url or self.API, '--json', '{"query": "{ shop { name } }"}', *extra)
+
+    @staticmethod
+    def http_error(url, code, body=b''):
+        return urllib.error.HTTPError(url, code, 'err', {}, io.BytesIO(body))
+
+    def test_valid_stored_token_is_used_without_minting(self):
+        self.link()
+        calls, fake = self.opener()
+        code, _, _ = self.call(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(calls['mint'], [])
+        self.assertEqual(calls['api'][0].get_header('X-shopify-access-token'), TOKEN)
+
+    def test_expired_token_is_minted_cached_and_used(self):
+        self.link(expires_in=-60)
+        entry_before = (self.dir / 'shopify_access_tokens.json').read_bytes()
+        calls, fake = self.opener()
+        code, out, err = self.call(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls['mint']), 1)
+        self.assertEqual(calls['api'][0].get_header('X-shopify-access-token'), MINTED)
+        cache = json.loads(self.cache_file().read_text())
+        self.assertEqual(cache['access_token'], MINTED)
+        self.assertGreater(cache['expires_at'], time.time() + 86000)
+        self.assertEqual(self.cache_file().stat().st_mode & 0o777, 0o600)
+        # The entry the device software manages is never rewritten by the helper.
+        self.assertEqual((self.dir / 'shopify_access_tokens.json').read_bytes(), entry_before)
+        for text in (out, err):
+            self.assertNotIn(MINTED, text)
+
+    def test_mint_request_goes_to_the_stored_shop_with_the_client_credentials(self):
+        self.link(expires_in=-60)
+        calls, fake = self.opener()
+        self.call(fake)
+        req = calls['mint'][0]
+        self.assertEqual(req.full_url, 'https://%s/admin/oauth/access_token' % self.SHOP)
+        self.assertEqual(req.get_method(), 'POST')
+        self.assertIsNone(req.get_header('Authorization'))
+        self.assertIsNone(req.get_header('X-shopify-access-token'))
+        form = dict(urllib_parse_qsl(req.data.decode()))
+        self.assertEqual(form, {'grant_type': 'client_credentials', 'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET})
+
+    def test_cached_token_is_reused_on_the_next_call(self):
+        self.link(expires_in=-60)
+        calls, fake = self.opener()
+        self.call(fake)
+        self.call(fake)
+        self.assertEqual(len(calls['mint']), 1)
+        self.assertEqual(len(calls['api']), 2)
+        self.assertEqual(calls['api'][1].get_header('X-shopify-access-token'), MINTED)
+
+    def test_missing_token_is_minted(self):
+        self.link(token='')
+        calls, fake = self.opener()
+        code, _, _ = self.call(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls['mint']), 1)
+
+    def test_token_close_to_expiry_is_renewed(self):
+        self.link(expires_in=120)
+        calls, fake = self.opener()
+        self.call(fake)
+        self.assertEqual(len(calls['mint']), 1)
+        self.assertEqual(calls['api'][0].get_header('X-shopify-access-token'), MINTED)
+
+    def test_cache_is_ignored_when_the_client_id_changes(self):
+        self.link(expires_in=-60)
+        calls, fake = self.opener()
+        self.call(fake)
+        self.link(expires_in=-60, client_id='cid-other')
+        self.call(fake)
+        self.assertEqual(len(calls['mint']), 2)
+
+    def test_cache_is_ignored_when_the_shop_changes(self):
+        self.link(expires_in=-60)
+        calls, fake = self.opener()
+        self.call(fake)
+        self.link(expires_in=-60, shop='other-shop.myshopify.com')
+        self.call(fake, 'https://other-shop.myshopify.com/admin/api/2025-10/graphql.json')
+        self.assertEqual(len(calls['mint']), 2)
+        self.assertEqual(calls['mint'][1].full_url, 'https://other-shop.myshopify.com/admin/oauth/access_token')
+
+    def test_cache_holds_no_secret_and_no_plain_client_id(self):
+        self.link(expires_in=-60)
+        _, fake = self.opener()
+        self.call(fake)
+        text = self.cache_file().read_text()
+        self.assertNotIn(CLIENT_SECRET, text)
+        self.assertNotIn(CLIENT_ID, text)
+
+    def test_damaged_cache_is_just_a_miss(self):
+        self.link(expires_in=-60)
+        self.cache_file().write_text('{not json')
+        calls, fake = self.opener()
+        code, _, _ = self.call(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls['mint']), 1)
+
+    def test_failing_to_write_the_cache_is_not_fatal(self):
+        self.link(expires_in=-60)
+        calls, fake = self.opener()
+        with patch.object(self.mod.os, 'replace', side_effect=OSError('disk full')):
+            code, _, _ = self.call(fake)
+        self.assertEqual(code, 0)
+        self.assertFalse(self.cache_file().exists())
+        self.assertEqual([p.name for p in self.dir.glob('.*.tmp')], [])
+
+    def test_cache_is_dropped_when_the_connector_is_gone(self):
+        self.link(expires_in=-60)
+        _, fake = self.opener()
+        self.call(fake)
+        self.assertTrue(self.cache_file().exists())
+        (self.dir / 'shopify_access_tokens.json').unlink()
+        code, _, err = self.call(fake)
+        self.assertEqual(code, 3)
+        self.assertIn('not connected', err)
+        self.assertFalse(self.cache_file().exists())
+
+    def test_minted_lifetime_is_bounded_and_defaulted(self):
+        self.link(expires_in=-60)
+        _, fake = self.opener(mint=json.dumps({'access_token': MINTED, 'expires_in': 10 ** 9}))
+        self.call(fake)
+        self.assertLessEqual(json.loads(self.cache_file().read_text())['expires_at'], time.time() + 7 * 86400 + 5)
+        self.cache_file().unlink()
+        _, fake = self.opener(mint=json.dumps({'access_token': MINTED}))
+        self.call(fake)
+        expires_at = json.loads(self.cache_file().read_text())['expires_at']
+        self.assertAlmostEqual(expires_at, time.time() + 3600, delta=10)
+
+    def test_rejected_token_is_reminted_once_and_the_call_retried(self):
+        self.link()
+        state = {'n': 0}
+
+        def api(req):
+            state['n'] += 1
+            if state['n'] == 1:
+                raise self.http_error(req.full_url, 401, b'{"errors":"invalid"}')
+            return FakeResponse('{"data": {"ok": true}}')
+
+        calls, fake = self.opener(api=api)
+        code, out, _ = self.call(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {'data': {'ok': True}})
+        self.assertEqual(len(calls['mint']), 1)
+        self.assertEqual([r.get_header('X-shopify-access-token') for r in calls['api']], [TOKEN, MINTED])
+
+    def test_a_token_minted_in_this_call_is_not_retried_on_401(self):
+        self.link(expires_in=-60)
+        calls, fake = self.opener(api=lambda req: (_ for _ in ()).throw(self.http_error(req.full_url, 401)))
+        code, out, err = self.call(fake)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, '')
+        self.assertIn('HTTP 401', err)
+        self.assertEqual((len(calls['mint']), len(calls['api'])), (1, 1))
+
+    def test_a_second_401_after_the_retry_stops(self):
+        self.link()
+        calls, fake = self.opener(api=lambda req: (_ for _ in ()).throw(self.http_error(req.full_url, 401)))
+        code, _, err = self.call(fake)
+        self.assertEqual(code, 1)
+        self.assertIn('HTTP 401', err)
+        self.assertEqual((len(calls['mint']), len(calls['api'])), (1, 2))
+
+    def test_401_without_saved_client_credentials_is_reported_not_retried(self):
+        self.link(client_id='', client_secret='')
+        calls, fake = self.opener(api=lambda req: (_ for _ in ()).throw(self.http_error(req.full_url, 401)))
+        code, _, err = self.call(fake)
+        self.assertEqual(code, 1)
+        self.assertIn('HTTP 401', err)
+        self.assertEqual((len(calls['mint']), len(calls['api'])), (0, 1))
+
+    def test_rejected_credentials_ask_to_reconnect_without_echoing_anything(self):
+        self.link(expires_in=-60)
+        body = ('<html>invalid_request client %s secret %s</html>' % (CLIENT_ID, CLIENT_SECRET)).encode()
+        for status in (400, 401, 403):
+            with self.subTest(status=status):
+                calls, fake = self.opener(mint=lambda req: (_ for _ in ()).throw(self.http_error(req.full_url, status, body)))
+                code, out, err = self.call(fake)
+                self.assertEqual(code, 3)
+                self.assertEqual(out, '')
+                self.assertIn('reconnect shopify', err)
+                self.assertIn('rejected the saved client ID/secret', err)
+                for secret in (CLIENT_SECRET, CLIENT_ID):
+                    self.assertNotIn(secret, err)
+                self.assertEqual(calls['api'], [])
+
+    def test_network_failures_are_retryable(self):
+        self.link(expires_in=-60)
+        cases = {
+            'unreachable': urllib.error.URLError(OSError('no route')),
+            'server error': self.http_error('https://x', 503),
+            'garbage body': '<html>not json</html>',
+            'no token': json.dumps({'expires_in': 100}),
+            'empty token': json.dumps({'access_token': '', 'expires_in': 100}),
+            'oversized lifetime string': json.dumps({'access_token': MINTED, 'expires_in': 'soon'}),
+        }
+        for name, mint in cases.items():
+            with self.subTest(case=name):
+                calls, fake = self.opener(mint=mint)
+                code, out, err = self.call(fake)
+                self.assertEqual(code, 1)
+                self.assertEqual(out, '')
+                self.assertIn('try again', err)
+                self.assertNotIn(CLIENT_SECRET, err)
+                self.assertEqual(calls['api'], [])
+
+    def test_a_redirected_token_request_is_not_followed(self):
+        self.link(expires_in=-60)
+        calls, fake = self.opener(mint=lambda req: (_ for _ in ()).throw(self.http_error(req.full_url, 302)))
+        code, _, err = self.call(fake)
+        self.assertEqual(code, 1)
+        self.assertIn('not followed', err)
+        self.assertEqual(calls['api'], [])
+
+    def test_expired_token_without_client_credentials_asks_to_reconnect(self):
+        self.link(expires_in=-60, client_id='', client_secret='')
+        calls, fake = self.opener()
+        code, _, err = self.call(fake)
+        self.assertEqual(code, 3)
+        self.assertIn('reconnect shopify', err)
+        self.assertEqual((calls['mint'], calls['api']), ([], []))
+
+    def test_a_tampered_shop_never_receives_the_client_secret(self):
+        for shop in ('evil.example.com', 'a.myshopify.com.evil.example', 'a/b.myshopify.com', 'my-shop.myshopify.com.evil.example', ''):
+            with self.subTest(shop=shop):
+                self.link(expires_in=-60, shop=shop)
+                calls, fake = self.opener()
+                code, _, err = self.call(fake)
+                self.assertNotEqual(code, 0)
+                self.assertEqual((calls['mint'], calls['api']), ([], []))
+                self.assertNotIn(CLIENT_SECRET, err)
+
+    def test_case_and_padding_of_the_stored_shop_are_normalized_to_the_same_host(self):
+        self.link(shop=' My-Shop.MyShopify.com ')
+        calls, fake = self.opener()
+        code, _, _ = self.call(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(calls['api'][0].full_url, self.API)
+
+    def test_calling_another_host_never_triggers_a_token_request(self):
+        self.link(expires_in=-60)
+        for url in ('https://other-shop.myshopify.com/admin/api/2025-10/graphql.json',
+                    'https://evil.example/admin/oauth/access_token',
+                    'https://admin.shopify.com/store/my-shop'):
+            with self.subTest(url=url):
+                calls, fake = self.opener()
+                code, _, _ = self.call(fake, url)
+                self.assertEqual(code, 4)
+                self.assertEqual((calls['mint'], calls['api']), ([], []))
+
+    def test_secret_and_tokens_never_reach_stdout_or_stderr(self):
+        self.link(expires_in=-60)
+        echo = '{"echo": "%s %s %s"}' % (MINTED, CLIENT_SECRET, CLIENT_ID)
+        _, fake = self.opener(api=echo)
+        code, out, err = self.call(fake)
+        self.assertEqual(code, 0)
+        for secret in (MINTED, CLIENT_SECRET):
+            self.assertNotIn(secret, out + err)
+        self.assertIn('[credential]', out)
+        # And on an error body that echoes them.
+        _, fake = self.opener(api=lambda req: (_ for _ in ()).throw(self.http_error(req.full_url, 500, echo.encode())))
+        code, out, err = self.call(fake)
+        self.assertEqual(code, 1)
+        for secret in (MINTED, CLIENT_SECRET):
+            self.assertNotIn(secret, out + err)
+
+    def test_info_reports_saved_credentials_without_values(self):
+        self.link(expires_in=-60)
+        code, out, _ = self.run_main('info', 'shopify')
+        self.assertEqual(code, 0)
+        info = json.loads(out)
+        self.assertEqual(info['shop'], self.SHOP)
+        self.assertEqual(info['client_credentials'], 'saved')
+        self.assertTrue(info['auto_refresh'])
+        self.assertFalse(info['expired'])
+        for secret in (CLIENT_SECRET, CLIENT_ID, TOKEN):
+            self.assertNotIn(secret, out)
+        self.link(client_id='', client_secret='')
+        info = json.loads(self.run_main('info', 'shopify')[1])
+        self.assertEqual(info['client_credentials'], 'missing')
+
+    def test_list_shows_shopify_and_ignores_the_token_cache(self):
+        self.link(expires_in=-60)
+        _, fake = self.opener()
+        self.call(fake)
+        code, out, _ = self.run_main('list')
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip().splitlines(), ['shopify: connected (%s, pat)' % self.SHOP])
+        self.assertNotIn(MINTED, out)
+
+    def test_scrub_covers_several_secrets(self):
+        text = 'a %s b %s c' % (TOKEN, CLIENT_SECRET)
+        scrubbed = self.mod.scrub(text, TOKEN, CLIENT_SECRET, '')
+        self.assertNotIn(TOKEN, scrubbed)
+        self.assertNotIn(CLIENT_SECRET, scrubbed)
+
+
+def urllib_parse_qsl(text):
+    from urllib.parse import parse_qsl
+    return parse_qsl(text, keep_blank_values=True)
 
 
 if __name__ == '__main__':

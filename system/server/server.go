@@ -558,6 +558,11 @@ func (s *Server) Serve(closeFn func()) error {
 	// mcp.servers.<code> side-effect.
 	connectorGroup := api.Group("device/connectors")
 	connectorGroup.POST("pat", adminAuthMiddleware(s.config), s.deviceMQTTHandler.SetConnectorPAT)
+	// Shopify has its own routes (a store domain + client ID + client secret
+	// instead of one pasted token); static segments win over :code below.
+	connectorGroup.GET("shopify", adminAuthMiddleware(s.config), s.deviceMQTTHandler.GetShopify)
+	connectorGroup.PUT("shopify", adminAuthMiddleware(s.config), s.deviceMQTTHandler.SetShopify)
+	connectorGroup.DELETE("shopify", adminAuthMiddleware(s.config), s.deviceMQTTHandler.RemoveShopify)
 	connectorGroup.GET(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.GetConnector)
 	connectorGroup.DELETE(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.RemoveConnector)
 

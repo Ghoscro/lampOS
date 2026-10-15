@@ -769,6 +769,43 @@ carrying BOTH a `refresh_token` AND `refresh:true` (the backend owns refresh
 eligibility via the `refresh` flag) once it is within 10 minutes of expiry, via the
 backend `/connector/refresh-token` endpoint.
 
+**Per-connection variables:** a connector whose API or token endpoint is specific to
+one account (for example a store domain) can carry those values in the relayed
+`credentials` map: individual keys (e.g. `shop`) plus `connector_vars`, a JSON object
+of string values. For a connector that refreshes through the backend, the device stores
+them with the rest of `credentials` and, on every refresh, sends the parsed object as
+`vars` in the `/connector/refresh-token` body
+(`{"connector","refresh_token","vars":{...}}`) so the backend can address the same
+account. `vars` is omitted when the connector has none, so connectors with static
+endpoints send exactly the same body as before. An unparseable `connector_vars` is
+logged (connector name only) and treated as absent. The refresh re-write keeps the
+stored `credentials` intact, so the values survive every rotation.
+
+**Connector skill (`skills/connectors`):** the agent calls linked services through
+`scripts/connector.py`, which only sends a credential to the connector's official host.
+Most hosts are fixed per connector; **Shopify** is per account: the helper sends the
+token (in `X-Shopify-Access-Token`, not `Authorization`) only to the single store host
+stored in `credentials.shop` and refuses every other host. The skill documents draft
+product and article creation and gates anything customer-visible behind a read-back.
+
+**Shopify is a client-credentials connector.** The customer creates their own Shopify
+app and enters the store domain, client ID and client secret in the Autonomous app. The
+backend checks them by minting a token, then relays `connector.set.shopify` with
+`auth_type: "pat"`, an `access_token` that lasts about 24 hours, **no** refresh token,
+`refresh: false`, and `credentials` `{shop, client_id, client_secret}`. Because there is
+no refresh token the entry never enters the `/connector/refresh-token` loop (the loop
+only picks entries with a `refresh_token` and `refresh:true`). Instead the skill helper
+renews the token itself: before a call, if the stored token is missing or has under five
+minutes left, it POSTs `grant_type=client_credentials` with the saved client ID and
+secret to `https://<stored shop>/admin/oauth/access_token` (that host only, no redirects
+followed) and caches the result in `shopify.token.json` next to the entry file. The cache
+is helper-owned (mode `0600`, written atomically), is keyed by a hash of shop + client ID
+so it is ignored when either changes, never holds the secret, and is dropped the next
+time the helper finds the connector gone. The helper never rewrites the entry file that the connector writer
+manages, retries a call once with a freshly minted token after a `401`, and prints neither
+tokens nor the secret. If Shopify rejects the saved credentials the helper exits with a
+"reconnect" message instead of looping.
+
 #### `channel.refresh_config`
 
 Re-applies a channel's canonical config block on an already-onboarded device — for
