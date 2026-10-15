@@ -71,7 +71,9 @@ server must be deployed before a HAL build that sends the new name (an older ser
 ignores `preset` and answers 200 with its default classes). Both graphs use explicit
 TensorRT profiles (1–500 queries, optimized for 46) and are warmed at 46 and 1 queries,
 so engines are built at startup, on the idle slot during a two-slot deploy (about 97 s
-on the current GPU), never in the middle of a request. Request schema:
+on the current GPU), never in the middle of a request. Image models (FER, pose 2D/3D,
+action, ONNX object detectors) warm up at batch 1 and at their max batch, so TensorRT
+builds the full batch range at startup instead of on the first lone request. Request schema:
 [`integrations/perception-service/docs/api.md`](../integrations/perception-service/docs/api.md#object-detection--websocket--http).
 Model choices and outputs:
 [`integrations/perception-service/docs/perceptions.md`](../integrations/perception-service/docs/perceptions.md).

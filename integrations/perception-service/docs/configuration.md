@@ -154,8 +154,9 @@ them to the GPU predictor in batches. Two knobs per model:
 | `BATCH_SIZE` | Max items dispatched in a single `predict()` call. Higher = better GPU utilization under concurrent load, but more VRAM per call. |
 | `BATCH_TIMEOUT` | Max seconds to wait for the batch to fill before dispatching what's available. Lower = less latency under light load. |
 
-Both default to `1` / `0.1` when omitted. The predictor's ONNX warmup runs at
-`BATCH_SIZE` so TensorRT pre-allocates the right amount of VRAM. SER is the
+Both default to `1` / `0.1` when omitted. Image predictors warm up at batch 1 and at
+`BATCH_SIZE`, so TensorRT builds the whole batch range (and pre-allocates its VRAM)
+at startup rather than on the first lone request (#612). SER is the
 exception: it warms up at batch 1 with two shapes (2 s and 8 s), the two ends of
 its input bound (`MIN_AUDIO_S`/`MAX_AUDIO_S`), not `SER__BATCH_SIZE`.
 

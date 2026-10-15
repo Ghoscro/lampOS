@@ -73,6 +73,9 @@ deploy server trước bản HAL gửi tên mới (server cũ bỏ qua `preset` 
 định của nó). Cả hai graph dùng profile TensorRT tường minh (1–500 query, tối ưu cho 46) và
 được warm ở 46 và 1 query, nên engine được build lúc khởi động, trên slot đang rảnh khi
 deploy hai slot (khoảng 97 s trên GPU hiện tại), không bao giờ giữa chừng một request.
+Các mô hình ảnh (FER, pose 2D/3D, action, bộ phát hiện vật thể ONNX) khởi động ở batch 1
+và batch tối đa, để TensorRT dựng đủ dải batch ngay lúc khởi động thay vì ở yêu cầu đơn lẻ
+đầu tiên.
 Schema request:
 [`integrations/perception-service/docs/api.md`](../../integrations/perception-service/docs/api.md#object-detection--websocket--http).
 Lựa chọn model và output:
