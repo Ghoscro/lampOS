@@ -1139,7 +1139,7 @@ autonomous-os/
 
 ### HAL OTA Package
 
-Để phân phối qua OTA, `scripts/release/upload-hal.sh` zip nội dung folder `hal/` (loại `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`):
+Để phân phối qua OTA, `scripts/release/upload-hal.sh` zip nội dung folder `hal/` (loại `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`, `.coverage`, `drivers/voice/resources/ambernet.onnx`):
 
 ```
 hal-{version}.zip         # nội dung hal/ nằm ở gốc zip → giải nén vào /opt/hal
@@ -1147,6 +1147,12 @@ hal-{version}.zip         # nội dung hal/ nằm ở gốc zip → giải nén 
 ├── pyproject.toml, uv.lock
 └── VERSION_HAL
 ```
+
+Model nhận diện ngôn ngữ (`ambernet.onnx`, ~117 MB) không nằm trong zip: OTA thay
+`/opt/hal` ở mỗi lần update, nên HAL tải release asset được pin trong
+`drivers/voice/resources/ambernet.model.json` (URL + SHA-256) vào
+`/opt/.models-hal`, thư mục này giữ nguyên qua các lần update và chỉ tải một lần
+cho mỗi version model (xem `docs/vi/realtime-voice_vi.md`, "Cổng ngôn ngữ").
 
 ### HAL HTTP API (FastAPI trên port 5001)
 
@@ -1188,7 +1194,7 @@ Chạy qua `make upload-hal`. Script source `ota-config.sh` / `ota-metadata.sh`,
 
 1. `uv lock --project hal --python 3.12 --check` — từ chối publish khi lockfile lỗi thời.
 2. Tăng patch version trong `hal/VERSION_HAL` (khởi tạo `1.0.0` nếu chưa có).
-3. Zip nội dung `hal/` thành `hal-<version>.zip` (loại `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`).
+3. Zip nội dung `hal/` thành `hal-<version>.zip` (loại `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`, `.coverage`, và file `drivers/voice/resources/ambernet.onnx` local, nếu không file này sẽ ghi đè model được pin trên mọi thiết bị).
 4. Upload lên `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/ota/hal/<version>.zip` (no-cache).
 5. Giải nén `ota/metadata.json` đã ký, set `hal.version`, `hal.url`, `hal.sha256`, `hal.updated_at` (giữ nguyên `min_version` đang có — nâng bằng `promote-ota.sh`), ký lại và upload.
 

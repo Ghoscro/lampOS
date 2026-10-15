@@ -3578,6 +3578,88 @@ doesn't double-restart. Hashing the whole file (rather than the HAL-read subset)
 keeps the signal self-maintaining as HAL's read set evolves; the only cost is one
 spurious HAL restart on the next boot after an os-server-only field changes.
 
+### Language gate (spoken language before a session opens)
+
+`hal/drivers/voice/lang_id/` runs AmberNet (fp32 ONNX, 107 VoxLingua languages) to
+drop speech that is not in the selected language before any session opens. The
+selected language is `stt_language`; an empty value (the web "Auto" option), an
+unsupported code, `HAL_LANG_GATE=off`, or neither a local model nor a valid pin
+leaves the gate off. Labels are the committed `ambernet.labels.json`
+(`HAL_LANG_ID_LABELS_PATH`).
+
+**Model delivery** (`lang_id/model_store.py`). A local file at
+`HAL_LANG_ID_MODEL_PATH` (default `hal/drivers/voice/resources/ambernet.onnx`,
+git-ignored and excluded from the HAL zip) wins, for development. Otherwise HAL
+reads the pin `HAL_LANG_ID_MODEL_MANIFEST` (default
+`resources/ambernet.model.json`: `{"url": "https://…", "sha256": "…", "size": …}`,
+a release asset) and keeps the model in `HAL_LANG_ID_CACHE_DIR` (default
+`/opt/.models-hal` on a device, beside `/opt/.uv-cache-hal`) as
+`ambernet-<sha256[:12]>.onnx`, which survives HAL OTA because OTA replaces
+`/opt/hal`. A missing or hash-mismatched cache file is downloaded in a background
+thread to `<file>.part`, checked against the SHA-256 and renamed into place, so the
+final path only ever holds a verified model; a failed download is deleted and
+retried after 30 s, doubling up to 600 s. Neither HAL start nor the voice loop
+waits for it.
+
+The gate is **active** only once the model is loaded (`Language gate active`).
+Until then (download in flight, loading at boot), or when the model fails to load,
+every capture logs `[lang-gate] PASS (model not ready)` and opens at once, with no
+hold. When a download completes, the gate turns active without a HAL restart.
+
+At the VAD hand-off in `_vad_loop`, `_language_gate_accepts` holds the capture until
+it has `HAL_LANG_GATE_SPEECH_S` (2.0 s) of 16 kHz speech frames (int16 RMS at least
+`HAL_LANG_GATE_SPEECH_RMS`, 300), the utterance ends (a
+`HAL_LANG_GATE_UTTERANCE_GAP_S`, 1.0 s, non-speech gap) or `HAL_LANG_GATE_MAX_WAIT_S`
+(3.5 s) passes. Every frame read while holding, and while the model runs, is
+appended to the pre-roll, so an accepted capture reaches the session whole. The
+capture is accepted when the selected language holds at least
+`HAL_LANG_GATE_MIN_PROB` (0.5) of the full 107-language softmax. Less than
+`HAL_LANG_GATE_MIN_SPEECH_S` (0.7) of speech cannot be judged and
+`HAL_LANG_GATE_SHORT` decides (`reject`, the default, or `accept`). If an inference
+fails, that capture is accepted. Playback starting during the hold drops the capture.
+
+- **Live mode:** the gate is the last check in `_live_decision`, after the music,
+  noise and wake-focus checks and before `prepare_turn()`, so a reject returns
+  `"skip"` and no billed live session is prepared.
+- **Turn mode:** a `"turn"` decision is gated the same way before `_stream_session`
+  opens STT and realtime. Harness voice captures (`bypass_realtime`) are not gated.
+- A capture is judged once, even when live falls back to a turn. A reject clears
+  the VAD lookback (the held audio was consumed) and any pending listening cue.
+
+`HAL_LANG_GATE` selects `enforce` (default), `shadow` (log, never reject) or `off`.
+`HAL_LANG_ID_CPUS` (for example `0,1,2,3`; empty = no pin) runs loading and
+inference on one worker thread pinned with `sched_setaffinity`;
+`HAL_LANG_ID_THREADS` defaults to one per pinned CPU, else 2.
+`HAL_LANG_GATE_DUMP_DIR` writes the scored speech and the held capture as WAVs per
+decision. Log lines: `[lang-gate] ACCEPT|REJECT (<reason>): <lang> in_set=<p> on
+<s>s speech, held <ms>ms`.
+
+**Measured on lamp-75c9** (turn mode, `stt_language=en`, `HAL_LANG_ID_CPUS=0,1,2,3`,
+macOS `say` from a MacBook beside the lamp, English Samantha at 230 wpm,
+Vietnamese Linh at 330 wpm, office background, 2026-10-14):
+
+| Case | Result |
+|---|---|
+| Vietnamese alone (13 captures) | 13 rejected (`in_set` 0.00), no session opened |
+| English with 1.4 s or more of speech, capture starting with the utterance (20, incl. composed clips) | 20 accepted (`in_set` 0.68–1.00) |
+| Short English: "Hey lamp! thanks." / "...say hello." / "...what's two plus two?" / "...what time is it?" | 1 of 4 accepted (`too_short` at 0.6 s; `in_set` 0.02 and 0.30 at 0.9–1.2 s) |
+| Hold from `Speech detected` to the verdict, accepted captures (n=21) | p50 2.9 s, max 4.3 s |
+| AmberNet inference on 2 s of speech, 4× A55 (n=31) | p50 553 ms, p95 661 ms, max 1395 ms; load 1.07 s |
+
+Download test on lamp-75c9 (model served at 1.5 MB/s, first transfer cut at 30 MB):
+HAL and the voice loop started at once; three captures during the download logged
+`PASS (model not ready)` within 31 ms of `Speech detected` and opened STT; the cut
+transfer was discarded and retried after 30 s; the retry (116.9 MB in 78.2 s)
+verified, loaded in 0.8 s and logged `Language gate active`; without a restart the
+next Vietnamese captures were rejected (`in_set` 0.00) and English accepted (0.64).
+
+The gate only decides whether a session opens; it does not filter audio inside an
+open session. In 10 clips of 5 s English followed directly by 5 s Vietnamese (and
+5 more with 5 s English after that), the gate accepted the English, the session
+stayed open through the Vietnamese, and Nova-3 `en` transcribed none of the
+Vietnamese: each transcript held only the English, including the trailing English.
+The Vietnamese did keep the turn open until about 1 s after it stopped.
+
 ### `config.json` `realtime` block
 
 Modelled in Go at `system/server/config/realtime.go`; read in HAL at

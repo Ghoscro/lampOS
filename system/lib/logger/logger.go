@@ -578,7 +578,7 @@ func (h *gelfHandler) Handle(_ context.Context, r slog.Record) error {
 	msg := map[string]any{
 		"version":       "1.1",
 		"host":          id.host,
-		"short_message": r.Message,
+		"short_message": gelfMessage(r),
 		"timestamp":     float64(r.Time.UnixNano()) / 1e9,
 		"level":         slogLevelToGELF(r.Level),
 		"_service_name": id.service,
@@ -594,14 +594,14 @@ func (h *gelfHandler) Handle(_ context.Context, r slog.Record) error {
 		if h.group != "" {
 			key = h.group + "." + key
 		}
-		msg["_"+key] = a.Value.String()
+		msg["_"+key] = gelfAttrValue(a.Key, a.Value)
 	}
 	r.Attrs(func(a slog.Attr) bool {
 		key := a.Key
 		if h.group != "" {
 			key = h.group + "." + key
 		}
-		msg["_"+key] = a.Value.String()
+		msg["_"+key] = gelfAttrValue(a.Key, a.Value)
 		return true
 	})
 
