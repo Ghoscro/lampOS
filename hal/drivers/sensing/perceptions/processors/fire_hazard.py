@@ -26,7 +26,7 @@ from hal.telemetry.fire_hazard_metrics import FireHazardStats
 from .base import Perception
 from .fire_gate import FireGate, GateVerdict
 from .models import FireHazard, FireHazardEnum
-from .utils import bbox_area, bbox_intersection, img2b64, xywh_to_xyxy
+from .utils import bbox_area, bbox_intersection, img2b64, retry_after_s, xywh_to_xyxy
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +215,13 @@ class RemoteFireHazardDetector:
                     "[fire_hazard] HTTP 429 (quota) — pausing detection for %.0fs: %s",
                     delay, resp.text[:120],
                 )
+                return None
+            if resp.status_code == 503:
+                # Server busy (#612): skip this check without counting a 429 streak.
+                self.last_outcome = "busy"
+                delay = retry_after_s(resp.headers)
+                self._backoff_until = time.time() + delay
+                logger.warning("[fire_hazard] HTTP 503 (server busy) — pausing detection for %.0fs", delay)
                 return None
             self._rate_limited_in_a_row = 0
             if resp.status_code != 200:

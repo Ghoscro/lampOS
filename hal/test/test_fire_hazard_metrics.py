@@ -158,7 +158,8 @@ def test_detector_reports_outcome(monkeypatch):
         ([_Resp(400), _Resp(200)], "ok", True),
         ([requests.Timeout("slow")], "timeout", False),
         ([requests.ConnectionError("down")], "error", False),
-        ([_Resp(503)], "http_error", False),
+        ([_Resp(503)], "busy", False),
+        ([_Resp(500)], "http_error", False),
         ([_Resp(429)], "rate_limited", False),
     ]
     for responses, outcome, fallback in cases:
@@ -169,3 +170,12 @@ def test_detector_reports_outcome(monkeypatch):
         assert (det.last_outcome, det.last_preset_fallback) == (outcome, fallback), responses
     det.detect(FRAME)  # inside the 429 window
     assert det.last_outcome == "backoff"
+
+
+def test_busy_503_is_its_own_counted_call(reports):
+    s = FireHazardStats(start=0.0)
+    s.record_owlv2("busy", None)
+    s.record_owlv2("ok", 200.0)
+    s.maybe_report(3600.0, gate_state="ready")
+    p = reports[0][1]
+    assert p["owlv2_busy"] == 1 and p["owlv2_calls"] == 2

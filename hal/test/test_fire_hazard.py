@@ -815,3 +815,37 @@ def test_results_applied_in_order():
         clock.t += STEP
     assert seen == sorted(seen) and len(set(seen)) == 5
     assert p._streaks["flame"][0] == T0
+
+
+# --- 503 = server busy (#612) ---------------------------------------------------
+
+from hal.drivers.sensing.perceptions.processors.utils import retry_after_s  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("headers", "lo", "hi"),
+    [
+        ({"Retry-After": "2"}, 1.6, 2.4),
+        ({"Retry-After": "100"}, 24.0, 36.0),   # clamped to 30 s, then jittered
+        ({"Retry-After": "0"}, 1.6, 2.4),       # clamped up to 2 s
+        ({}, 4.0, 6.0),                         # default 5 s
+        ({"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}, 4.0, 6.0),  # date form -> default
+    ],
+)
+def test_retry_after_is_clamped_and_jittered(headers, lo, hi):
+    for _ in range(50):
+        assert lo <= retry_after_s(headers) <= hi
+
+
+def test_503_pauses_detection_for_retry_after(post, monkeypatch):
+    now = [5000.0]
+    monkeypatch.setattr(fire_hazard.time, "time", lambda: now[0])
+    det = _detector()
+    post.responses = [_Resp(503, {"detail": "busy"}, {"Retry-After": "2"})]
+    assert det.detect(FRAME) is None
+    assert det.last_outcome == "busy"
+    assert 1.6 <= det._backoff_until - now[0] <= 2.4
+    n = len(post.bodies)
+    now[0] += 1.0
+    assert det.detect(FRAME) is None
+    assert len(post.bodies) == n  # still inside the pause: no request sent
