@@ -148,11 +148,17 @@ func (b *Bootstrap) waitForConfig(ctx context.Context) bool {
 func (b *Bootstrap) Serve() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	return b.serve(ctx)
+}
 
+func (b *Bootstrap) serve(ctx context.Context) error {
 	// Interrupted local transitions must be recovered even if provisioning,
 	// the feed URL or poll settings are unavailable after a power loss.
 	if err := b.recoverPendingUpdate(ctx); err != nil {
-		return fmt.Errorf("startup OTA recovery: %w", err)
+		if !bootstrapSelfUpdateInProgress(err) {
+			return fmt.Errorf("startup OTA recovery: %w", err)
+		}
+		slog.Info("bootstrap self-update is awaiting health; recovery deferred while installer holds lock", "component", "bootstrap")
 	}
 
 	if !b.waitForConfig(ctx) {

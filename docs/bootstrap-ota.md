@@ -1458,6 +1458,13 @@ legacy ownership/running state even after V2 updates. A missing or mismatched
 checkpoint fails closed rather than inventing the previous state. Bootstrap runs
 pending recovery at startup before waiting for a metadata URL or parsing poll
 settings. A recovery error stops startup; the journal remains for retry.
+The narrow exception is a validated bootstrap self-update journal while another
+process actually holds the updater's `flock`: the new bootstrap serves `/health`
+so the installer can finish, but every OTA mutation still returns update-in-progress.
+PID files are not evidence of an active installer. When the lock is released, a
+remaining journal follows normal recovery. After V2 replaces HAL/os-server,
+validated bootstrap/web recovery remains allowed; journals targeting the replaced
+HAL/os-server/device profile remain blocked.
 
 Bootstrap remains independent and updateable. A compatibility declaration prevents
 replacing it or the updater with an older implementation that does not understand
