@@ -592,6 +592,92 @@ class ServiceOTATests(unittest.TestCase):
                 self.assertIn('has been replaced', result.stderr)
                 self.assertNotIn('NETWORK_SHOULD_NOT_RUN', result.stderr)
 
+    def test_full_updater_recovers_independent_components_after_migration(self):
+        self._full_recovery_after_migration('bootstrap', succeeds=True)
+
+    def test_full_updater_recovers_web_after_migration(self):
+        self._full_recovery_after_migration('web', succeeds=True)
+
+    def test_full_updater_rejects_recovery_of_replaced_owners(self):
+        for component in ('hal', 'os-server', 'device'):
+            with self.subTest(component=component):
+                self._full_recovery_after_migration(component, succeeds=False)
+
+    def test_full_updater_rejects_forged_independent_recovery_paths(self):
+        self._full_recovery_after_migration('bootstrap', succeeds=False, forged=True)
+
+    def _full_recovery_after_migration(self, component, succeeds, forged=False):
+        if not self.m.REGISTRY.exists():
+            self.install()
+        rollback = self.root / 'legacy-rollback'
+        rollback.mkdir(exist_ok=True)
+        binaries = self.root / 'bin'
+        binaries.mkdir(exist_ok=True)
+        live = {'bootstrap': binaries / 'bootstrap-server', 'web': self.root / 'web',
+                'hal': self.root / 'hal', 'os-server': binaries / 'os-server',
+                'device': self.root / 'device'}[component]
+        backup = rollback / (component + '.previous')
+        if component in ('web', 'hal', 'device'):
+            live.mkdir(exist_ok=True)
+            backup.mkdir(exist_ok=True)
+            (live / 'index.html').write_text('candidate')
+            (backup / 'index.html').write_text('previous')
+        else:
+            live.write_text('candidate')
+            backup.write_text('previous')
+        actions = {'bootstrap': 'restore_bootstrap_service', 'web': 'restore_web_service_state',
+                   'hal': 'restore_hal_service_state', 'os-server': 'restore_os_server_service',
+                   'device': 'restore_device_service_state'}
+        journal = rollback / 'pending-update.json'
+        journal.write_text(json.dumps(dict(live=str(self.root / 'forged' if forged else live),
+                                           backup=str(backup), restore=actions[component], had_live=True)))
+        source = SCRIPT.read_text()
+        for old, new in (
+            ('/root/bootstrap/services', self.m.STATE),
+            ('/opt/autonomous-services', self.m.ROOT),
+            ('/var/lib/autonomous-services', self.m.DATA),
+            ('/root/bootstrap/rollback', rollback),
+            ('/root/bootstrap/progress', self.root / 'progress'),
+            ('/root/config/bootstrap.json', self.root / 'bootstrap.json'),
+            ('/etc/systemd/system', self.m.UNITS),
+            ('/var/lock/software-update', self.root / 'lock'),
+            ('/usr/local/bin', binaries),
+            ('/usr/share/nginx/html/setup', self.root / 'web'),
+            ('/opt/hal', self.root / 'hal'),
+        ):
+            source = source.replace(old, str(new))
+        updater = self.root / 'software-update'
+        updater.write_text(source)
+        events = self.root / 'recovery-events'
+        events.write_text('')
+        shell_env = self.root / 'shell-env'
+        shell_env.write_text("""id() { echo 0; }
+flock() { return 0; }
+systemctl() { echo "$*" >> "$RECOVERY_EVENTS"; return 0; }
+nginx() { return 0; }
+curl() { case "${!#}" in http://127.0.0.1:8080/health|http://127.0.0.1/) return 0;; *) echo UNEXPECTED_NETWORK >&2; return 88;; esac; }
+export -f id flock systemctl nginx curl
+""")
+        result = subprocess.run(['/bin/bash', str(updater), 'recover'],
+            env={**os.environ, 'BASH_ENV': str(shell_env), 'SOFTWARE_UPDATE_DETACHED': '1',
+                 'RECOVERY_EVENTS': str(events)}, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0 if succeeds else 1, result.stdout + result.stderr)
+        self.assertNotIn('UNEXPECTED_NETWORK', result.stderr)
+        output = events.read_text()
+        self.assertNotIn('hal', output)
+        self.assertNotIn('os-server', output)
+        self.assertEqual(journal.exists(), not succeeds)
+        if succeeds:
+            self.assertIn('restart ' + ('nginx' if component == 'web' else 'bootstrap'), output)
+            self.assertEqual((live / 'index.html').read_text() if component == 'web' else live.read_text(), 'previous')
+        else:
+            self.assertEqual(output, '')
+            self.assertTrue(backup.exists())
+            if not forged:
+                self.assertIn('Recovery would restart replaced component', result.stderr)
+        self.assertEqual(self.m.status('hal'), 'blocked')
+        self.assertEqual(self.m.status('os-server'), 'blocked')
+
     def test_health_probe_uses_same_environment_cwd_and_running_pid(self):
         self.install()
         entry = self.m.load()['components']['lamp-os']

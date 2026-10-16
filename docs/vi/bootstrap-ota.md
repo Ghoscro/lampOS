@@ -1418,7 +1418,13 @@ service sau đó ghi đè. `software-update rollback lamp-os` chọn release tr�
 chạy legacy ban đầu kể cả sau update V2. Thiếu/sai checkpoint thì từ chối, không
 tự đoán trạng thái cũ. Bootstrap chạy pending recovery lúc startup, trước khi
 chờ metadata URL hoặc parse poll settings. Recovery lỗi thì dừng startup và giữ
-journal để thử lại.
+journal để thử lại. Ngoại lệ hẹp là journal tự update bootstrap đã được kiểm tra
+và có process thực sự giữ `flock` của updater: bootstrap mới phục vụ `/health`
+để installer hoàn tất, nhưng mọi thao tác OTA vẫn bị chặn với update-in-progress.
+File PID không chứng minh installer còn chạy. Khi lock được nhả, journal còn lại
+đi qua recovery bình thường. Sau khi V2 thay HAL/os-server, vẫn cho recovery
+bootstrap/web hợp lệ; journal nhắm HAL/os-server/device profile đã bị thay vẫn
+bị chặn.
 
 Bootstrap vẫn độc lập và nâng cấp được. Khai báo tương thích ngăn thay bootstrap
 hoặc updater bằng bản cũ không hiểu quyền sở hữu service và phục hồi. Kiểm tra

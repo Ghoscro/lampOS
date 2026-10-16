@@ -1314,10 +1314,23 @@ clear_publish_pending() {
   PENDING_RESTORE_SERVICES=""
 }
 
+recovery_owner_allowed() {
+  local owner="$1" ownership
+  if [ -e /root/bootstrap/services/ownership.json ] || [ -L /root/bootstrap/services/ownership.json ]; then
+    ownership=$(service_transaction status "$owner") || return 1
+    [ "$ownership" != blocked ] || {
+      echo "Recovery would restart replaced component: $owner" >&2
+      return 1
+    }
+  fi
+}
+
 recover_pending_update() {
   local journal="$ROLLBACK_DIR/pending-update.json" live backup restore staged failed check had_live rootfs
   if [ ! -f "$journal" ]; then
     if [ ! -d "$HAL_DIR" ] && [ -d "$ROLLBACK_DIR/hal.previous" ]; then
+      # A retired HAL tree is not evidence of an interrupted HAL update.
+      recovery_owner_allowed hal || return 0
       mark_publish_pending "$HAL_DIR" "$ROLLBACK_DIR/hal.previous" restore_hal_service_state || return 1
     else
       return 0
@@ -1332,17 +1345,20 @@ recover_pending_update() {
   staged=$(jq -r '.staged // empty' "$journal") || return 1
   case "$restore" in
     restore_hal_service_state)
+      recovery_owner_allowed hal || return 1
       [ "$live" = "$HAL_DIR" ] && [ "$backup" = "$ROLLBACK_DIR/hal.previous" ] || return 1
       systemctl stop hal || return 1; check=check_hal ;;
     restore_web_service_state)
       [ "$live" = "$WEB_ROOT" ] && [ "$backup" = "$ROLLBACK_DIR/web.previous" ] || return 1
       systemctl stop nginx || return 1; check=check_web ;;
     restore_device_service_state)
+      recovery_owner_allowed hal && recovery_owner_allowed os-server || return 1
       [ "$backup" = "$ROLLBACK_DIR/device.previous" ] && [[ "$live" = /* ]] && [ "$live" != / ] || return 1
       DEVICE_DEST="$live"
       systemctl stop os-server || return 1
       systemctl stop hal || return 1; check=check_device_profile ;;
     restore_os_server_service)
+      recovery_owner_allowed os-server || return 1
       [ "$live" = /usr/local/bin/os-server ] && [ "$backup" = "$ROLLBACK_DIR/os-server.previous" ] || return 1
       systemctl stop os-server || return 1; check=check_os_server ;;
     restore_bootstrap_service)
@@ -1505,12 +1521,9 @@ if [ -e /root/bootstrap/services/ownership.json ] || [ -L /root/bootstrap/servic
   { [ "$APP" != rollback ] && [ "$APP" != rollback-to-legacy ]; } || SERVICE_TARGET="${2:-}"
   SERVICE_STATUS=$(service_transaction status "$SERVICE_TARGET") || exit 1
   [ "$SERVICE_STATUS" != blocked ] || { echo "Component $SERVICE_TARGET has been replaced; refusing legacy update/rollback" >&2; exit 1; }
-  HAL_STATUS=$(service_transaction status hal) || exit 1
-  if [ "$HAL_STATUS" = blocked ]; then
-    [ ! -e "$ROLLBACK_DIR/pending-update.json" ] || { echo "Legacy journal conflicts with replacement ownership" >&2; exit 1; }
-  else
-    recover_pending_update || { echo "Pending legacy OTA recovery failed" >&2; exit 1; }
-  fi
+  # Recovery validates the journal's actual owner and paths. Bootstrap/web
+  # remain independent after HAL/os-server have been replaced.
+  recover_pending_update || { echo "Pending OTA recovery failed" >&2; exit 1; }
 else
   recover_pending_update || { echo "Pending OTA recovery failed; refusing another update" >&2; exit 1; }
 fi
