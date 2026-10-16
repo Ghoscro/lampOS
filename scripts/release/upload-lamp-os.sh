@@ -3,6 +3,8 @@
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
 
+source "${RELEASE_DIR}/ota-metadata.sh"
+
 for tool in git docker curl python3 tar; do
   command -v "$tool" >/dev/null || { echo "Missing required tool: $tool" >&2; exit 1; }
 done
@@ -12,9 +14,7 @@ if [ "$build_only" = 0 ]; then
   for tool in gsutil jq openssl; do
     command -v "$tool" >/dev/null || { echo "Missing required tool: $tool" >&2; exit 1; }
   done
-  : "${OTA_SIGNING_PRIVATE_KEY:?Full service OTA metadata requires a signing key}"
-  : "${OTA_SIGNING_KEY_ID:?OTA_SIGNING_KEY_ID is required}"
-  [ -r "$OTA_SIGNING_PRIVATE_KEY" ] || { echo 'Signing key is not readable' >&2; exit 1; }
+  ota_metadata_signing_preflight
 fi
 python3 -c 'import sys; sys.exit("Python 3.10+ is required" if sys.version_info < (3, 10) else 0)'
 docker info >/dev/null

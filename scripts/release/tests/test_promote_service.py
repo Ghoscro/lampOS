@@ -48,13 +48,13 @@ class PromotionTests(unittest.TestCase):
                 result, _ = self.promote(**args)
                 self.assertNotEqual(result.returncode, 0)
 
-    def test_direct_script_requires_signing_before_fetch(self):
+    def test_partial_signing_configuration_fails_before_fetch(self):
         env = dict(os.environ, ACTIVATE='1', FOR='lamp')
         env.pop('OTA_SIGNING_PRIVATE_KEY', None)
-        env.pop('OTA_SIGNING_KEY_ID', None)
+        env['OTA_SIGNING_KEY_ID'] = 'partial'
         result = subprocess.run(['bash', str(SCRIPT), 'lamp-os'], env=env, text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Activation metadata must be signed', result.stderr)
+        self.assertIn('configure both', result.stderr)
         self.assertNotIn('Fetch metadata', result.stdout)
 
 

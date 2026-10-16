@@ -14,7 +14,7 @@ import (
 	"go.autonomous.ai/os/system/lib/core/system"
 )
 
-// activationPlan accepts only decoded, signature-verified service metadata. It
+// activationPlan accepts decoded service metadata from the configured trust mode. It
 // validates the whole replacement graph before starting any service transition.
 func (b *Bootstrap) activationPlan(meta domain.OTAMetadata) ([]string, error) {
 	r, err := b.serviceRegistry()

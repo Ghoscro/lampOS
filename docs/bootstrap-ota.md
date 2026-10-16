@@ -1325,8 +1325,16 @@ HAL version is the plain text file `hal/VERSION_HAL` (installed as `/opt/hal/VER
 
 ## Service replacement through the existing OTA feed
 
-Service-defined components use the existing signed metadata payload; there is no
+Service-defined components use the existing metadata feed and trust mode; there is no
 second release manifest and no architecture-specific `runtime`, `v2` or `v3` key.
+A device without `signing_public_key` accepts the legacy unsigned feed, including
+service installation and subsequent updates. Service packages still require a
+valid SHA-256 and URL in either mode. If a public key is configured, signature
+verification remains mandatory; an invalid or missing signature never falls back
+to legacy mode. Publishing to GCS uses the existing gsutil credentials. Optional
+release signing remains available, and a signed feed cannot be overwritten as
+unsigned merely because the publishing shell lacks its key.
+
 A component describes the actual service being shipped:
 
 ```json
@@ -1346,10 +1354,10 @@ A component describes the actual service being shipped:
 The component key and bare service name must match. `replaces` names existing
 `hal`/`os-server` or registered service-defined components, not arbitrary
 system services. Other legacy components are not replacement targets in this revision. Bootstrap itself cannot be replaced by this mechanism. Names,
-ownership and signed metadata are validated before a service transition. No
+ownership and metadata are validated before a service transition. No
 command line or shell hook is accepted from these fields.
 
-Initial migration is automatic when the signed service entry explicitly sets
+Initial migration is automatic when the service entry explicitly sets
 `activate_by_device[device_type]` to `true` and has a nonempty, valid
 `min_version_by_device[device_type]` no greater than the published version.
 The release operator enables this through promotion; the device user does not
@@ -1361,8 +1369,8 @@ make promote-service COMPONENT=lamp-os FOR=lamp V=0.1.0 ACTIVATE=1
 
 Bootstrap discovers promoted service components and invokes
 `software-update lamp-os --activate-promoted`. The updater checks the freshly
-fetched signed metadata and actual device type again before using the existing
-service transition transaction. Unsigned metadata, missing device targeting,
+fetched metadata and actual device type again before using the existing
+service transition transaction. Missing device targeting,
 invalid promotion floors, conflicting ownership, and obsolete updater support
 cannot authorize a first installation. Compatible bootstrap and updater releases
 must reach devices before enabling activation in the feed.
@@ -1424,15 +1432,15 @@ voice/hardware acceptance remain required before rollout.
 
 ### Publishing a service component
 
-Build and qualify the package separately, then publish using the existing signing
-credentials (`OTA_SIGNING_PRIVATE_KEY`, `OTA_SIGNING_KEY_ID`):
+Build and qualify the package separately, then publish using the existing GCS
+credentials. Signing is optional, as with legacy component releases:
 
 ```bash
 make upload-service COMPONENT=lamp-os V=0.1.0 PACKAGE=/path/lamp-os.zip REPLACES='hal os-server'
 make promote-service COMPONENT=lamp-os FOR=lamp V=0.1.0 ACTIVATE=1
 ```
 
-The publisher requires signed metadata, validates the package, preserves existing
+The publisher validates the package and its SHA-256, preserves existing
 promotion floors and other components, and rejects topology changes under an
 existing key. Package URLs include the content hash. A version cannot be reused
 with different content while it is the feed's current version. Serialize release
@@ -1454,8 +1462,8 @@ The command fetches and freezes `origin`'s `lamp-voice` commit in an isolated
 source directory. It builds the Rust workspace binaries and the OTA lifecycle
 adapter in a disposable Linux ARM64 Docker container, using the source's pinned
 Rust toolchain and lockfiles. Host Cargo/Zig are no longer required. Prerequisites:
-Docker with Linux ARM64 support, git, curl, Python 3.10+, authenticated gsutil and
-`OTA_SIGNING_PRIVATE_KEY` / `OTA_SIGNING_KEY_ID`. The Debian bookworm builder
+Docker with Linux ARM64 support, git, curl, Python 3.10+ and authenticated gsutil.
+`OTA_SIGNING_PRIVATE_KEY` / `OTA_SIGNING_KEY_ID` are optional. The Debian bookworm builder
 requires a Debian 12-compatible ARM64 runtime; this is not a universal robot image.
 
 The ZIP contains `VERSION`, `bin/service` (the Rust OTA lifecycle adapter),
@@ -1470,7 +1478,7 @@ not activated: bootstrap owns this release's updates.
 The ZIP's VERSION and package.json contain the version; package.json also records
 the frozen source commit. Publication reuses `upload-service`: one content-addressed
 ZIP in `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/services/lamp-os/<sha256>.zip` and one
-signed `lamp-os` entry in the existing OTA JSON, with `replaces: ["hal", "os-server"]`.
+`lamp-os` entry in the existing OTA JSON, with `replaces: ["hal", "os-server"]`.
 Existing promotion floors and activation settings are preserved; upload does not
 issue an activation promotion. Defaults remain bucket `s3-autonomous-upgrade-3`,
 prefix `os`. Serialize releases and retain the version-file change in release history.

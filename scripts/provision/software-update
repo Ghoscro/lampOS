@@ -1597,7 +1597,6 @@ if [ -n "$OTA_SIGNING_PUBLIC_KEY" ]; then
   jq -r '(.signed // .).signature.value' "$METADATA_TMP" | base64 -d > "$SIGNATURE_TMP" || { echo "Invalid OTA metadata signature"; exit 1; }
   openssl pkeyutl -verify -pubin -keyform DER -inkey "$PUBLIC_DER" -rawin -in "$METADATA_PAYLOAD" -sigfile "$SIGNATURE_TMP" >/dev/null || { echo "OTA metadata signature verification failed"; exit 1; }
 else
-  [ ! -e /root/bootstrap/services/ownership.json ] || { echo "Service-managed devices require signed OTA metadata" >&2; exit 1; }
   echo "[software-update] WARN: OTA signing is not configured; using legacy unsigned metadata"
   cp "$METADATA_TMP" "$METADATA_PAYLOAD"
 fi
@@ -1656,7 +1655,7 @@ if [ "$SERVICE_STATUS" = managed ] && [ -z "$SERVICE_NAME" ]; then
 fi
 if [ -n "$SERVICE_NAME" ]; then
   [ $# -le 2 ] && { [ $# -eq 1 ] || [ "$2" = --activate ] || [ "$2" = --activate-promoted ]; } || { echo "Usage: software-update <component> [--activate|--activate-promoted]" >&2; exit 1; }
-  [ -n "$OTA_SIGNING_PUBLIC_KEY" ] && [ -n "$URL" ] && [[ "$SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo "Service OTA requires signed metadata, URL and SHA-256" >&2; exit 1; }
+  [ -n "$URL" ] && [[ "$SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo "Service OTA requires URL and SHA-256" >&2; exit 1; }
   [ "$(timeout 5 /usr/local/bin/bootstrap-server --ota-service-protocol)" = 1 ] || { echo "Upgrade bootstrap for service OTA recovery before activation" >&2; exit 1; }
   ZIP_TMP=$(mktemp)
   download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Service package verification failed" >&2; exit 1; }
