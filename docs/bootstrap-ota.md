@@ -1522,3 +1522,10 @@ checking. It does not prove successful speech, provider connectivity or physical
 motion safety. Real-device activation, reboot/interruption recovery and rollback
 must be tested before a migration promotion. No generic profile implies permission
 to replace other robot types or all Lamps.
+
+The release inventory also carries `lamp-selftest`, `lamp-settings` and
+`lamp-setup` when built upstream; adding their executables does not enable their
+services or run self-test/reset operations. `lamp-memory-fixture`,
+`lamp-records-fixture` and the current `lamp-same-voice pairs` measurement CLI
+are development tools and are excluded. Unknown binaries still fail packaging
+so a new runtime cannot be silently omitted.

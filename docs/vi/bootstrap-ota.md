@@ -1472,3 +1472,9 @@ Health trả PID/version adapter và trạng thái active của các unit con v�
 độ mới. Không chứng minh voice/provider hay an toàn chuyển động thực tế. Cần test
 activation, reboot/gián đoạn và rollback trên device trước khi promote migration.
 Gói chung không có nghĩa được phép chuyển các robot khác hoặc toàn bộ Lamp.
+
+Inventory còn mang `lamp-selftest`, `lamp-settings` và `lamp-setup` khi upstream
+build chúng; thêm executable không tự bật service hay chạy self-test/reset.
+`lamp-memory-fixture`, `lamp-records-fixture` và CLI đo `lamp-same-voice pairs`
+hiện là công cụ phát triển nên không đưa vào gói. Binary chưa phân loại vẫn làm
+packaging báo lỗi để không âm thầm bỏ sót runtime mới.

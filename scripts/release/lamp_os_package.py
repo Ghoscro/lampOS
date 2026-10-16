@@ -13,10 +13,12 @@ CORE_BINARIES = ('lamp-keeper', 'lamp-voice', 'lamp-turn-end', 'lamp-body',
                  'lamp-body-worker', 'lamp-eyes', 'lamp-name', 'lamp-memory',
                  'lamp-actions', 'lamp-controls', 'lamp-expression', 'lamp-health', 'lamp-policy')
 OPTIONAL_BINARIES = ('lamp-surround', 'lamp-update', 'lamp-ears', 'lamp-schedule',
-                     'lamp-tasks', 'lamp-air', 'lamp-records', 'lamp-mood', 'lamp-bus')
+                     'lamp-tasks', 'lamp-air', 'lamp-records', 'lamp-mood', 'lamp-bus',
+                     'lamp-selftest', 'lamp-settings', 'lamp-setup')
 DEVELOPMENT_BINARIES = {'lamp-audio', 'lamp-body-inspect', 'lamp-ipc-probe',
     'lamp-memory-eval', 'lamp-observer', 'lamp-policy-fit', 'lamp-policy-judges',
-    'lamp-sound-fixtures', 'lamp-tasks-harness-fixture', 'lamp-voice-eval'}
+    'lamp-sound-fixtures', 'lamp-tasks-harness-fixture', 'lamp-voice-eval',
+    'lamp-memory-fixture', 'lamp-records-fixture', 'lamp-same-voice'}
 # Upstream verifies these same immutable bytes before inference.
 ASSETS = {
     'smart-turn-v3.2-gpu.onnx': 'ab8dc64b88713f90b571c15b714bd1330e6c883cad8763dacf65c9376dc539be',
