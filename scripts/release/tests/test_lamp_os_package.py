@@ -74,6 +74,24 @@ class PackageTest(unittest.TestCase):
             manifest = json.loads(archive.read('package-manifest.json'))
         self.assertIn('/etc/lampOS/test.key', manifest['required_paths'])
 
+    def test_new_upstream_runtime_and_development_binaries(self):
+        runtime = ('lamp-selftest', 'lamp-settings', 'lamp-setup')
+        development = ('lamp-memory-fixture', 'lamp-records-fixture', 'lamp-same-voice')
+        for name in runtime + development:
+            (self.binaries / name).write_bytes(self.adapter.read_bytes() + name.encode())
+        manifest = self.build()
+        for name in runtime:
+            self.assertIn(name, manifest['binaries'])
+        for name in development:
+            self.assertNotIn(name, manifest['binaries'])
+        with zipfile.ZipFile(self.output) as archive:
+            names = archive.namelist()
+            for name in runtime:
+                self.assertTrue(any(path.endswith('/' + name) for path in names))
+                self.assertNotIn('units/' + name + '.service', names)
+            for name in development:
+                self.assertFalse(any(path.endswith('/' + name) for path in names))
+
     def test_complete_deterministic_archive_and_modes(self):
         manifest = self.build()
         first = self.output.read_bytes()
