@@ -1291,9 +1291,16 @@ Version của HAL là file text `hal/VERSION_HAL` (cài thành `/opt/hal/VERSION
 
 ## Thay service qua OTA feed hiện tại
 
-Component khai báo service dùng payload metadata đã ký hiện tại; không có release
+Component khai báo service dùng metadata và chế độ tin cậy OTA hiện tại; không có release
 manifest thứ hai hay key theo kiến trúc `runtime`, `v2`, `v3`. Component mô tả
-service thực tế được phát hành:
+service thực tế được phát hành. Device chưa cấu hình `signing_public_key` dùng feed
+legacy không ký, gồm cả cài service lần đầu và các lần update sau. Gói service vẫn
+bắt buộc URL và SHA-256 hợp lệ trong cả hai chế độ. Nếu device đã có public key,
+chữ ký vẫn bắt buộc; chữ ký thiếu/sai không tự hạ về legacy. Upload dùng thông tin
+gsutil hiện có. Ký release vẫn được hỗ trợ tùy chọn; không ghi đè feed đã ký thành
+không ký chỉ vì shell publish thiếu key.
+
+Ví dụ:
 
 ```json
 {
@@ -1312,10 +1319,10 @@ service thực tế được phát hành:
 Key component phải trùng tên service không có hậu tố `.service`. `replaces` chỉ
 định `hal`/`os-server` hoặc component khai báo service đã đăng ký,
 không phải service hệ thống tùy ý. Bản này chưa hỗ trợ thay các component V1 khác. Cơ chế này không được thay bootstrap. Tên, quyền
-sở hữu và metadata đã ký được kiểm tra trước khi chuyển service. Các trường này
+sở hữu và metadata được kiểm tra trước khi chuyển service. Các trường này
 không được chứa lệnh shell hay hook thực thi tùy ý.
 
-Máy tự chuyển lần đầu khi mục service trong metadata đã ký đặt
+Máy tự chuyển lần đầu khi mục service trong metadata đặt
 `activate_by_device[device_type]` thành `true` và có ngưỡng
 `min_version_by_device[device_type]` hợp lệ, không rỗng, không lớn hơn version
 đang phát hành. Người vận hành release bật bằng promote; người dùng device
@@ -1327,8 +1334,8 @@ make promote-service COMPONENT=lamp-os FOR=lamp V=0.1.0 ACTIVATE=1
 
 Bootstrap tìm các service được promote rồi gọi
 `software-update lamp-os --activate-promoted`. Updater kiểm tra lại metadata
-đã ký vừa tải và loại device thực tế trước khi dùng giao dịch chuyển service
-hiện có. Metadata không ký, thiếu chỉ định loại máy, ngưỡng không hợp lệ,
+vừa tải và loại device thực tế trước khi dùng giao dịch chuyển service
+hiện có. Thiếu chỉ định loại máy, ngưỡng không hợp lệ,
 xung đột quyền sở hữu hoặc updater cũ không cho phép cài lần đầu. Phải đưa
 bootstrap và updater tương thích xuống device trước khi bật chỉ định trên feed.
 
@@ -1385,15 +1392,15 @@ kích hoạt trên device, reboot/mất điện và hành vi voice/hardware th�
 
 ### Phát hành component service
 
-Build và kiểm chứng gói riêng, sau đó phát hành bằng thông tin ký hiện có
-(`OTA_SIGNING_PRIVATE_KEY`, `OTA_SIGNING_KEY_ID`):
+Build và kiểm chứng gói riêng, sau đó phát hành bằng thông tin đăng nhập GCS
+hiện có. Ký là tùy chọn, giống các component OTA legacy:
 
 ```bash
 make upload-service COMPONENT=lamp-os V=0.1.0 PACKAGE=/path/lamp-os.zip REPLACES='hal os-server'
 make promote-service COMPONENT=lamp-os FOR=lamp V=0.1.0 ACTIVATE=1
 ```
 
-Publisher bắt buộc metadata đã ký, kiểm tra gói, giữ nguyên ngưỡng promote và các
+Publisher kiểm tra gói và SHA-256, giữ nguyên ngưỡng promote và các
 component khác, đồng thời từ chối đổi tổ chức service dưới key cũ. URL gói chứa
 hash nội dung. Không được dùng lại version với nội dung khác khi version đó đang
 là bản hiện tại trên feed. Chạy các lần publish tuần tự như các script release
@@ -1414,8 +1421,8 @@ make upload-lamp-os
 Lệnh fetch và cố định commit `lamp-voice` từ `origin` trong thư mục source riêng.
 Toàn bộ binary workspace Rust và adapter lifecycle OTA được build trong Docker
 Linux ARM64 dùng toolchain/lockfile của source. Máy host không cần Cargo/Zig nữa.
-Cần Docker hỗ trợ Linux ARM64, git, curl, Python 3.10+, gsutil đã đăng nhập và
-`OTA_SIGNING_PRIVATE_KEY` / `OTA_SIGNING_KEY_ID`. Builder Debian bookworm yêu cầu
+Cần Docker hỗ trợ Linux ARM64, git, curl, Python 3.10+ và gsutil đã đăng nhập.
+`OTA_SIGNING_PRIVATE_KEY` / `OTA_SIGNING_KEY_ID` là tùy chọn. Builder Debian bookworm yêu cầu
 runtime ARM64 tương thích Debian 12; đây không phải image chung cho mọi robot.
 
 ZIP chứa `VERSION`, `bin/service` (adapter lifecycle OTA bằng Rust),
@@ -1429,7 +1436,7 @@ hoạt hai service update độc lập đó: bootstrap quản lý update release
 ZIP và package.json ghi version; package.json ghi cả commit source. Publish dùng lại
 `upload-service`: một ZIP theo hash ở
 `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/services/lamp-os/<sha256>.zip` và một entry
-`lamp-os` trong OTA JSON đã ký, khai báo `replaces: ["hal", "os-server"]`.
+`lamp-os` trong OTA JSON, khai báo `replaces: ["hal", "os-server"]`.
 Giữ nguyên ngưỡng promote/chỉ định activation đã có; upload không thực hiện promote
 kích hoạt. Mặc định bucket `s3-autonomous-upgrade-3`, prefix `os`. Chạy release tuần
 tự và giữ version-file đã thay đổi trong lịch sử release.

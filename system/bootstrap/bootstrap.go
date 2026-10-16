@@ -580,15 +580,13 @@ func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) (payload []byte, v
 func decodeOTAMetadataPayload(payload []byte, requireChecksums bool) (domain.OTAMetadata, error) {
 	var meta domain.OTAMetadata
 	if err := json.Unmarshal(payload, &meta); err != nil {
-		return nil, fmt.Errorf("decode verified metadata payload: %w", err)
+		return nil, fmt.Errorf("decode metadata payload: %w", err)
 	}
 	for key, c := range meta {
 		if c.Service != "" || len(c.Replaces) > 0 || len(c.ActivateByDevice) > 0 {
-			if !requireChecksums {
-				delete(meta, key)
-				continue
-			}
-			if err := domain.ValidateOTAServiceComponent(key, c); err != nil {
+			// Service packages always require their topology, URL and checksum,
+			// including devices using the legacy unsigned metadata trust mode.
+			if err := validateOTAMetadata(domain.OTAMetadata{key: c}); err != nil {
 				return nil, err
 			}
 		}

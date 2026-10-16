@@ -16,7 +16,9 @@ args = sys.argv[1:]
 root = pathlib.Path(os.environ['MOCK_ROOT'])
 with (root / 'calls').open('a') as f:
     f.write(json.dumps([name, *args]) + '\n')
-if name == 'git':
+if name == 'openssl':
+    print('ED25519 Public-Key:')
+elif name == 'git':
     if 'get-url' in args:
         print('https://example.invalid/repo.git')
     elif 'fetch' in args and os.environ.get('FETCH_FAIL'):
@@ -56,7 +58,7 @@ class UploadLampOSTests(unittest.TestCase):
             root = Path(directory)
             checkout = root / 'checkout'
             scripts = checkout / 'scripts/release'; scripts.mkdir(parents=True)
-            for name in (SCRIPT.name, 'ota-config.sh'):
+            for name in (SCRIPT.name, 'ota-config.sh', 'ota-metadata.sh'):
                 shutil.copy2(SCRIPT.parent / name, scripts / name)
             (scripts / 'lamp_os_package.py').write_text(PACKAGER)
             (scripts / 'fetch_lamp_os_assets.py').write_text('')
@@ -64,16 +66,19 @@ class UploadLampOSTests(unittest.TestCase):
             version_file = checkout / 'system/VERSION_LAMP_OS'
             version_file.parent.mkdir(); version_file.write_text(initial_version + '\n')
             bindir = root / 'bin'; bindir.mkdir()
-            for name in ('git', 'docker', 'gsutil'):
+            for name in ('git', 'docker', 'gsutil', 'openssl'):
                 tool = bindir / name
                 tool.write_text(f'#!{sys.executable}\n' + MOCK); tool.chmod(0o755)
-            key = root / 'test-key'; key.write_text('fixture, not a credential')
+            key = root / 'test-key'
+            key.write_text('fixture; openssl is mocked')
             env = dict(os.environ, MOCK_ROOT=str(root), PATH=f'{bindir}:{os.environ["PATH"]}',
                        LAMP_OS_BUILD_ONLY='1' if build_only else '0', **flags)
             for name in ('OTA_SIGNING_PRIVATE_KEY', 'OTA_SIGNING_KEY_ID', 'LAMP_OS_OUTPUT', 'VERSION_FILE'):
                 env.pop(name, None)
             if signing:
                 env.update(OTA_SIGNING_PRIVATE_KEY=str(key), OTA_SIGNING_KEY_ID='fixture')
+                if signing == 'partial':
+                    env.pop('OTA_SIGNING_PRIVATE_KEY')
             result = subprocess.run(['bash', str(scripts / SCRIPT.name)], env=env, text=True, capture_output=True)
             calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()] if (root / 'calls').exists() else []
             published = (root / 'published').read_text() if (root / 'published').exists() else None
@@ -93,9 +98,15 @@ class UploadLampOSTests(unittest.TestCase):
         self.assertIsNone(published)
         self.assertEqual(version, '0.0.9')
 
-    def test_signing_required_before_build(self):
+    def test_unsigned_publish_without_key(self):
         result, calls, published, version = self.run_case(signing=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((published, version), ('0.0.10', '0.0.10'))
+
+    def test_partial_signing_fails_before_expensive_build(self):
+        result, calls, published, version = self.run_case(signing='partial')
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('configure both', result.stderr)
         self.assertEqual(calls, [])
         self.assertIsNone(published)
         self.assertEqual(version, '0.0.9')

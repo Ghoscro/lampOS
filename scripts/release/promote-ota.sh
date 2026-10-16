@@ -23,13 +23,11 @@ if [[ -z "$component" ]]; then
   exit 1
 fi
 
-# Activation is an explicit signed promotion, including direct script invocation.
+# Activation is explicit; signing follows the configured feed trust mode.
 if [[ -n "${ACTIVATE:-}" ]]; then
+  ota_metadata_signing_preflight
   [[ "$ACTIVATE" = 0 || "$ACTIVATE" = 1 ]] || { echo 'ACTIVATE must be 0 or 1' >&2; exit 1; }
   [[ -n "${FOR:-}" ]] || { echo 'Activation promotion requires FOR=<device_type>' >&2; exit 1; }
-  : "${OTA_SIGNING_PRIVATE_KEY:?Activation metadata must be signed}"
-  : "${OTA_SIGNING_KEY_ID:?OTA_SIGNING_KEY_ID is required}"
-  [[ -r "$OTA_SIGNING_PRIVATE_KEY" ]] || { echo 'Signing key is not readable' >&2; exit 1; }
 fi
 
 METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
@@ -40,7 +38,16 @@ trap 'rm -f "$METADATA_TMP" "$PAYLOAD_TMP"' EXIT
 
 echo "========== Fetch metadata from ${METADATA_GCS} =========="
 gsutil cp "$METADATA_GCS" "$METADATA_TMP"
+if [[ -n "${ACTIVATE:-}" ]]; then
+  ota_metadata_preserve_trust "$METADATA_TMP"
+fi
 ota_metadata_unpack "$METADATA_TMP" "$PAYLOAD_TMP"
+# Ordinary service updates use the same trust policy as service activation.
+# Legacy component promotion keeps its existing behavior.
+if jq -e --arg component "$component" '.[$component] | type == "object" and .service == $component' "$PAYLOAD_TMP" >/dev/null; then
+  ota_metadata_signing_preflight
+  ota_metadata_preserve_trust "$METADATA_TMP"
+fi
 
 python3 - "$PAYLOAD_TMP" "$component" "$override_min" "${FOR:-}" "${ACTIVATE:-}" <<'PY'
 import json, re, sys

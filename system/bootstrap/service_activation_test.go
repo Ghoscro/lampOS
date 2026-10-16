@@ -68,14 +68,12 @@ func TestActivationPlanChainsConflictsAndCycles(t *testing.T) {
 		t.Fatal("replaced ancestor resurrected")
 	}
 }
-func TestActivationMetadataNeverTrustsUnsignedIntent(t *testing.T) {
+func TestActivationMetadataRejectsNonserviceIntentInBothTrustModes(t *testing.T) {
 	payload := []byte(`{"hal":{"version":"2.0.0","activate_by_device":{"ota-test":true}}}`)
-	meta, err := decodeOTAMetadataPayload(payload, false)
-	if err != nil || len(meta) != 0 {
-		t.Fatalf("unsigned activation survived %v %v", meta, err)
-	}
-	if _, err := decodeOTAMetadataPayload(payload, true); err == nil {
-		t.Fatal("signed nonservice activation accepted")
+	for _, signed := range []bool{false, true} {
+		if _, err := decodeOTAMetadataPayload(payload, signed); err == nil {
+			t.Fatalf("nonservice activation accepted with signed=%v", signed)
+		}
 	}
 }
 func TestActivationUpdaterFlagAndRollbackGuard(t *testing.T) {
