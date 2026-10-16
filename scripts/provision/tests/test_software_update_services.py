@@ -83,6 +83,8 @@ class ServiceOTATests(unittest.TestCase):
             item.external_attr = (stat.S_IFREG | 0o755) << 16
             archive.writestr(item, '#!/bin/sh\nexit 0\n')
             archive.writestr('VERSION', version)
+            if not any(name == 'SERVICE_PREFLIGHT' for name, _ in extra):
+                archive.writestr('SERVICE_PREFLIGHT', '1')
             for name, value in extra:
                 archive.writestr(name, value)
         return path
@@ -96,6 +98,171 @@ class ServiceOTATests(unittest.TestCase):
         self.assertFalse(self.m.JOURNAL.exists())
         self.assertEqual(self.states['hal'], 'active')
         self.assertEqual(self.states['os-server'], 'active')
+
+    def test_architecture_checkpoint_survives_update_and_version_rollback(self):
+        self.install(version='0.1.0')
+        checkpoint = (self.m.STATE / 'activation/lamp-os.json').read_text()
+        self.install(version='0.2.0')
+        self.m.rollback('lamp-os')
+        self.assertEqual(self.m.load()['components']['lamp-os']['version'], '0.1.0')
+        self.assertEqual((self.m.STATE / 'activation/lamp-os.json').read_text(), checkpoint)
+        self.m.rollback('lamp-os', to_legacy=True)
+        self.assert_legacy()
+        self.assertFalse((self.m.STATE / 'activation/lamp-os.json').exists())
+
+    def test_interrupted_legacy_rollback_retains_original_checkpoint(self):
+        self.install()
+        self.install(version='0.2.0')
+        real_commit, real_recover = self.m.commit, self.m.recover
+        self.m.commit = lambda journal: (_ for _ in ()).throw(RuntimeError('power loss'))
+        self.m.recover = lambda: None
+        with self.assertRaisesRegex(RuntimeError, 'power loss'):
+            self.m.rollback('lamp-os', to_legacy=True)
+        self.assertTrue((self.m.STATE / 'activation/lamp-os.json').exists())
+        self.m.commit, self.m.recover = real_commit, real_recover
+        self.m.recover()
+        self.assertEqual(self.states['lamp-os'], 'active')
+        self.m.rollback('lamp-os', to_legacy=True)
+        self.assert_legacy()
+
+    def test_committed_legacy_rollback_finishes_cleanup_after_interruption(self):
+        self.install()
+        real_finalize, real_recover = self.m.finalize, self.m.recover
+        self.m.finalize = lambda journal: (_ for _ in ()).throw(RuntimeError('disk error'))
+        self.m.recover = lambda: None
+        self.m.rollback('lamp-os', to_legacy=True)
+        self.assertEqual(json.loads(self.m.JOURNAL.read_text())['phase'], 'committed')
+        self.m.finalize, self.m.recover = real_finalize, real_recover
+        self.m.recover()
+        self.assert_legacy()
+        self.assertFalse((self.m.STATE / 'activation/lamp-os.json').exists())
+
+    def test_original_checkpoint_backfilled_before_first_update(self):
+        self.install()
+        (self.m.STATE / 'activation/lamp-os.json').unlink()
+        self.install(version='0.2.0')
+        self.m.rollback('lamp-os', to_legacy=True)
+        self.assert_legacy()
+
+    def test_missing_original_checkpoint_never_guesses_legacy_state(self):
+        self.install()
+        self.install(version='0.2.0')
+        (self.m.STATE / 'activation/lamp-os.json').unlink()
+        events = list(self.events)
+        with self.assertRaisesRegex(RuntimeError, 'No saved activation checkpoint'):
+            self.m.rollback('lamp-os', to_legacy=True)
+        self.assertEqual(events, self.events)
+        self.assertEqual(self.states['lamp-os'], 'active')
+
+    def test_legacy_rollback_preserves_independent_service(self):
+        self.install()
+        self.install(key='other-worker', replaces=())
+        self.install(version='0.2.0')
+        self.m.rollback('lamp-os', to_legacy=True)
+        self.assertEqual(self.states['other-worker'], 'active')
+        self.assertIn('other-worker', self.m.load()['components'])
+        self.assertEqual(self.states['hal'], 'active')
+
+    def test_preflight_failure_never_stops_legacy(self):
+        archive = self.package(extra=[('SERVICE_PREFLIGHT', '1')])
+        entry = dict(service='lamp-os', replaces=['hal', 'os-server'], version='0.1.0')
+        with patch.object(self.m, 'run', side_effect=RuntimeError('missing profile')):
+            with self.assertRaisesRegex(RuntimeError, 'missing profile'):
+                self.m.install('lamp-os', entry, str(archive), True)
+        self.assert_legacy()
+        self.assertEqual(self.events, [])
+        self.assertEqual(list(self.m.UNITS.iterdir()), [])
+        self.assertFalse((self.m.STATE / 'blocked').exists())
+        self.assertFalse((self.m.STATE / 'enabled').exists())
+        self.assertEqual(list((self.m.ROOT / 'lamp-os/releases').iterdir()), [])
+        self.assertEqual(list((self.m.DATA / 'lamp-os/releases').iterdir()), [])
+
+    def test_second_prepare_failure_restores_previous_runtime_and_data(self):
+        self.install(version='0.1.0')
+        old = copy.deepcopy(self.m.load())
+        old_data = Path(old['components']['lamp-os']['data'])
+        (old_data / 'conversation').write_text('before preflight')
+        calls = []
+
+        def prepare(*args, **kwargs):
+            self.assertEqual(args[1], 'prepare')
+            staged = Path(kwargs['env']['AUTONOMOUS_SERVICE_DATA'])
+            self.assertNotEqual(staged, old_data)
+            calls.append(staged)
+            if len(calls) == 1:
+                self.assertEqual(self.states['lamp-os'], 'active')
+                self.assertEqual((staged / 'conversation').read_text(), 'before preflight')
+                # Simulate a last legitimate runtime write before stopping it.
+                (old_data / 'conversation').write_text('last runtime write')
+                (staged / 'candidate-only').write_text('discard this provisional copy')
+                return
+            self.assertEqual(self.states['lamp-os'], 'inactive')
+            self.assertEqual((staged / 'conversation').read_text(), 'last runtime write')
+            self.assertFalse((staged / 'candidate-only').exists())
+            raise RuntimeError('final staged configuration rejected')
+
+        with patch.object(self.m, 'run', side_effect=prepare):
+            with self.assertRaisesRegex(RuntimeError, 'final staged configuration rejected'):
+                self.install(version='0.2.0', activate=False)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.m.load(), old)
+        self.assertEqual(self.states['lamp-os'], 'active')
+        self.assertEqual(self.states['hal'], 'inactive')
+        self.assertEqual(self.states['os-server'], 'inactive')
+        self.assertEqual((old_data / 'conversation').read_text(), 'last runtime write')
+        self.assertFalse((old_data / 'candidate-only').exists())
+        self.assertFalse(self.m.JOURNAL.exists())
+        # Both previous-version rollback and architecture rollback remain intact.
+        self.m.rollback('lamp-os', to_legacy=True)
+        self.assert_legacy()
+
+    def test_preflight_runs_before_stop_with_staged_private_data(self):
+        archive = self.package(extra=[('SERVICE_PREFLIGHT', '1')])
+        entry = dict(service='lamp-os', replaces=['hal', 'os-server'], version='0.1.0')
+        def prepare(*args, **kwargs):
+            self.assertEqual(args[1], 'prepare')
+            self.assertEqual(self.states['hal'], 'active')
+            self.assertFalse(self.m.JOURNAL.exists())
+            data = Path(kwargs['env']['AUTONOMOUS_SERVICE_DATA'])
+            self.assertTrue(data.is_dir())
+            (data / 'prepared').write_text('ready')
+        with patch.object(self.m, 'run', side_effect=prepare):
+            self.m.install('lamp-os', entry, str(archive), True)
+        self.assertEqual((Path(self.m.load()['components']['lamp-os']['data']) / 'prepared').read_text(), 'ready')
+
+    def test_old_lamp_package_without_preflight_never_stops_legacy(self):
+        archive = self.root / 'old.zip'
+        with zipfile.ZipFile(archive, 'w') as z:
+            item = zipfile.ZipInfo('bin/service')
+            item.external_attr = (stat.S_IFREG | 0o755) << 16
+            z.writestr(item, '#!/bin/sh\nexit 0\n')
+            z.writestr('VERSION', '0.1.0')
+        entry = dict(service='lamp-os', replaces=['hal', 'os-server'], version='0.1.0')
+        with self.assertRaisesRegex(RuntimeError, 'requires SERVICE_PREFLIGHT'):
+            self.m.install('lamp-os', entry, str(archive), True)
+        self.assert_legacy()
+        self.assertEqual(self.events, [])
+
+    def test_unknown_preflight_contract_rejects_before_stop(self):
+        archive = self.package(extra=[('SERVICE_PREFLIGHT', '2')])
+        entry = dict(service='lamp-os', replaces=['hal', 'os-server'], version='0.1.0')
+        with self.assertRaisesRegex(RuntimeError, 'preflight contract'):
+            self.m.install('lamp-os', entry, str(archive), True)
+        self.assert_legacy()
+        self.assertEqual(self.events, [])
+
+    def test_failed_cleanup_retains_checkpoint_for_safe_retry(self):
+        self.install()
+        checkpoint = self.m.STATE / 'activation/lamp-os.json'
+        self.fail_stop = 'lamp-os'
+        with self.assertRaisesRegex(RuntimeError, 'stop failure'):
+            self.m.rollback('lamp-os', to_legacy=True)
+        self.assertTrue(checkpoint.exists())
+        self.assertNotEqual(self.states['hal'], 'active')
+        self.fail_stop = None
+        self.m.recover()
+        self.m.rollback('lamp-os', to_legacy=True)
+        self.assert_legacy()
 
     def test_cleanup_contract_and_legacy_unit_upgrade(self):
         self.install()
@@ -131,26 +298,30 @@ class ServiceOTATests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         entry = dict(service='lamp-os', version='1.2.3', activate_by_device={'lamp': True},
-                     min_version_by_device={'lamp': '1.0.0'})
+                     min_version_by_device={'lamp': '1.0.0'}, sha256='a' * 64,
+                     activation_release_by_device={'lamp': {'version': '1.2.3', 'sha256': 'a' * 64}})
         self.assertTrue(self.m.promoted_activation('lamp-os', entry))
         for change in ({'activate_by_device': {'lamp': False}}, {'activate_by_device': {'lamp': 'true'}},
                        {'activate_by_device': {'other': True}}, {'activate_by_device': []},
                        {'min_version_by_device': {}}, {'min_version_by_device': {'lamp': '0.0.0'}},
                        {'min_version_by_device': {'lamp': '2.0.0'}}, {'min_version_by_device': {'lamp': 1}},
-                       {'service': 'hal'}):
+                       {'service': 'hal'}, {'activation_release_by_device': {}},
+                       {'version': '1.2.4'}, {'sha256': 'b' * 64}):
             with self.subTest(change=change), self.assertRaises(RuntimeError):
                 self.m.promoted_activation('lamp-os', dict(entry, **change))
         self.assertEqual(self.events, [])
 
     def test_fresh_promoted_version_respects_rollback_guard(self):
         entry = dict(service='lamp-os', version='1.2.3', activate_by_device={'lamp': True},
-                     min_version_by_device={'lamp': '1.0.0'})
+                     min_version_by_device={'lamp': '1.0.0'}, sha256='a' * 64,
+                     activation_release_by_device={'lamp': {'version': '1.2.3', 'sha256': 'a' * 64}})
         config = self.root / 'bootstrap.json'
         config.write_text(json.dumps({'rollback_versions': {'lamp-os': '1.2.3'}}))
         with patch.dict(os.environ, {'DEVICE_TYPE': 'lamp'}):
             with self.assertRaisesRegex(RuntimeError, 'blocked after rollback'):
                 self.m.promoted_activation('lamp-os', entry)
             entry['version'] = '1.2.4'
+            entry['activation_release_by_device']['lamp']['version'] = '1.2.4'
             self.assertTrue(self.m.promoted_activation('lamp-os', entry))
             config.write_text('{"rollback_versions": []}')
             with self.assertRaisesRegex(RuntimeError, 'Invalid rollback_versions'):
@@ -163,7 +334,8 @@ class ServiceOTATests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         (self.root / 'config.json').write_text('{"device_type":" lamp "}')
         entry = dict(service='lamp-os', version='1.2.3', activate_by_device={'lamp': True},
-                     min_version_by_device={'lamp': '1.0.0'})
+                     min_version_by_device={'lamp': '1.0.0'}, sha256='a' * 64,
+                     activation_release_by_device={'lamp': {'version': '1.2.3', 'sha256': 'a' * 64}})
         self.assertTrue(self.m.promoted_activation('lamp-os', entry))
         os.environ['DEVICE_TYPE'] = 'other'
         with self.assertRaises(RuntimeError):
@@ -387,7 +559,8 @@ class ServiceOTATests(unittest.TestCase):
         self.install(version='0.2.0')
         self.install(version='0.3.0')
         versions = sorted((directory / 'VERSION').read_text() for directory in (self.m.ROOT / 'lamp-os/releases').iterdir())
-        self.assertEqual(versions, ['0.2.0', '0.3.0'])
+        # The activation checkpoint is retained independently of version rollback.
+        self.assertEqual(versions, ['0.1.0', '0.2.0', '0.3.0'])
         self.m.rollback('lamp-os')
         self.assertEqual(self.m.load()['components']['lamp-os']['version'], '0.2.0')
 

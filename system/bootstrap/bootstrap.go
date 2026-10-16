@@ -149,6 +149,12 @@ func (b *Bootstrap) Serve() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Interrupted local transitions must be recovered even if provisioning,
+	// the feed URL or poll settings are unavailable after a power loss.
+	if err := b.recoverPendingUpdate(ctx); err != nil {
+		return fmt.Errorf("startup OTA recovery: %w", err)
+	}
+
 	if !b.waitForConfig(ctx) {
 		return nil
 	}
@@ -583,7 +589,7 @@ func decodeOTAMetadataPayload(payload []byte, requireChecksums bool) (domain.OTA
 		return nil, fmt.Errorf("decode metadata payload: %w", err)
 	}
 	for key, c := range meta {
-		if c.Service != "" || len(c.Replaces) > 0 || len(c.ActivateByDevice) > 0 {
+		if c.Service != "" || len(c.Replaces) > 0 || len(c.ActivateByDevice) > 0 || len(c.ActivationReleaseByDevice) > 0 {
 			// Service packages always require their topology, URL and checksum,
 			// including devices using the legacy unsigned metadata trust mode.
 			if err := validateOTAMetadata(domain.OTAMetadata{key: c}); err != nil {

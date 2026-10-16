@@ -24,8 +24,34 @@ class MetadataTrustTests(unittest.TestCase):
         tool = self.bindir / 'gsutil'
         tool.write_text(f'#!{sys.executable}\n' + '''import os, pathlib, shutil, sys
 root=pathlib.Path(os.environ['MOCK_GCS'])
-args=sys.argv[1:]; i=args.index('cp'); source,dest=args[i+1:i+3]
+args=sys.argv[1:]
+generation_file=root/'generation'
+generation=int(generation_file.read_text()) if generation_file.exists() else 1
+if args[0] == 'stat':
+    if os.environ.get('STAT_FAIL'): sys.exit(1)
+    print('Generation:', generation); sys.exit(0)
+i=args.index('cp'); source,dest=args[i+1:i+3]
+if dest.endswith('metadata.json') and not source.startswith('gs://'):
+    if os.environ.get('CONCURRENT_BEFORE_WRITE'):
+        import json
+        metadata=json.loads((root/'metadata.json').read_text())
+        metadata['operator_change']='retained'
+        (root/'metadata.json').write_text(json.dumps(metadata))
+        generation+=1
+        generation_file.write_text(str(generation))
+    expected='x-goog-if-generation-match:'+str(generation)
+    if expected not in args:
+        print('412 precondition failed', file=sys.stderr); sys.exit(1)
+    generation_file.write_text(str(generation+1))
+if not source.startswith('gs://') and dest.endswith('.zip') and os.environ.get('CONCURRENT_DISABLE'):
+    import json
+    metadata=json.loads((root/'metadata.json').read_text())
+    metadata['lamp-os']['activate_by_device']={'lamp':False}
+    metadata['operator_change']='retained'
+    (root/'metadata.json').write_text(json.dumps(metadata))
+    generation_file.write_text(str(generation+1))
 if source.startswith('gs://'):
+    assert source.endswith('#'+str(generation)), source
     shutil.copyfile(root/'metadata.json',dest)
 else:
     with (root/'writes').open('a') as stream: stream.write(dest+'\\n')
@@ -61,6 +87,43 @@ else:
         data=json.loads(self.metadata.read_text())
         self.assertEqual(data['lamp-os']['activate_by_device'],{'lamp':True})
         self.assertEqual(data['lamp-os']['min_version_by_device'],{'lamp':'1.2.3'})
+
+    def test_competing_disable_is_not_overwritten_by_upload(self):
+        self.env['CONCURRENT_DISABLE'] = '1'
+        result = self.run_script('upload-service.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('concurrent release', result.stderr)
+        data = json.loads(self.metadata.read_text())
+        self.assertEqual(data['operator_change'], 'retained')
+        self.assertEqual(data['lamp-os']['activate_by_device'], {'lamp': False})
+        self.assertEqual(data['lamp-os']['version'], '1.0.0')
+
+    def test_competing_promotion_is_not_lost(self):
+        self.env.pop('ACTIVATE')
+        self.env['CONCURRENT_BEFORE_WRITE'] = '1'
+        result = self.run_script('promote-ota.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('concurrent release', result.stderr)
+        data = json.loads(self.metadata.read_text())
+        self.assertEqual(data['operator_change'], 'retained')
+        self.assertNotIn('min_version_by_device', data['lamp-os'])
+
+    def test_immutable_generation_fetch_and_conditional_publish_are_shared(self):
+        # All scripts touching the fleet feed must participate in the same CAS
+        # protocol; a legacy unconditional writer can resurrect activation.
+        for script in RELEASE.glob('*.sh'):
+            if script.name == 'ota-metadata.sh':
+                continue
+            source = script.read_text()
+            if 'ota_metadata_sign ' in source and 'metadata.json' in source:
+                self.assertIn('ota_metadata_fetch ', source, script.name)
+                self.assertIn('ota_metadata_publish ', source, script.name)
+
+    def test_read_failure_never_publishes(self):
+        self.env['STAT_FAIL'] = '1'
+        result = self.run_script('upload-service.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / 'writes').exists())
 
     def test_signed_feed_is_not_downgraded(self):
         payload=base64.b64encode(self.metadata.read_bytes()).decode()
