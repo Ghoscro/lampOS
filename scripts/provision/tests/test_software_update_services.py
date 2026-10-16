@@ -97,6 +97,35 @@ class ServiceOTATests(unittest.TestCase):
         self.assertEqual(self.states['hal'], 'active')
         self.assertEqual(self.states['os-server'], 'active')
 
+    def test_cleanup_contract_and_legacy_unit_upgrade(self):
+        self.install()
+        unit = self.m.UNITS / 'lamp-os.service'
+        unit.write_text(self.m.unit_text('lamp-os', cleanup=False))
+        self.install(version='0.2.0', activate=False)
+        self.assertIn('ExecStopPost=', unit.read_text())
+        self.assertIn('/current/SERVICE_CLEANUP || exec ', unit.read_text())
+        self.assertIn('/current/bin/service cleanup', unit.read_text())
+        self.assertIn('TimeoutStopSec=60', unit.read_text())
+
+    def test_failed_cleanup_is_not_treated_as_successful_stop(self):
+        self.install()
+        release = Path(self.m.load()['components']['lamp-os']['release'])
+        (release / 'SERVICE_CLEANUP').write_text('1')
+        with patch.object(self.m, 'run', side_effect=RuntimeError('cleanup failed')) as run:
+            with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                self.m.stop('lamp-os')
+            self.assertEqual(run.call_args.args[1], 'cleanup')
+            self.assertEqual(run.call_args.kwargs['env']['AUTONOMOUS_SERVICE_NAME'], 'lamp-os')
+        self.assertNotEqual(self.states['hal'], 'active')
+
+    def test_invalid_cleanup_contract_rejected_before_stopping_legacy(self):
+        entry = dict(service='lamp-os', replaces=['hal', 'os-server'], version='0.1.0')
+        archive = self.package(extra=[('SERVICE_CLEANUP', 'unsupported')])
+        with self.assertRaisesRegex(RuntimeError, 'cleanup contract'):
+            self.m.install('lamp-os', entry, str(archive), True)
+        self.assert_legacy()
+        self.assertEqual(self.events, [])
+
     def test_promoted_activation_requires_actual_device_and_floor(self):
         patcher = patch.dict(os.environ, {'DEVICE_TYPE': ' lamp '})
         patcher.start()
@@ -367,6 +396,8 @@ class ServiceOTATests(unittest.TestCase):
         source = SCRIPT.read_text()
         for old, new in (
             ('/root/bootstrap/services', self.m.STATE),
+            ('/opt/autonomous-services', self.m.ROOT),
+            ('/var/lib/autonomous-services', self.m.DATA),
             ('/root/bootstrap/rollback', self.root / 'legacy-rollback'),
             ('/root/config/bootstrap.json', self.root / 'bootstrap.json'),
             ('/opt/autonomous-services', self.m.ROOT),
@@ -422,6 +453,15 @@ class ServiceOTATests(unittest.TestCase):
         self.assertFalse((self.m.STATE / 'history/lamp-os.json').exists())
 
     def test_signed_service_dispatch_checks_signature_digest_and_bootstrap(self):
+        self._service_dispatch_checks()
+
+    def test_unsigned_service_dispatch_checks_digest_and_bootstrap(self):
+        self._service_dispatch_checks(unsigned=True)
+
+    def test_unsigned_installed_service_can_update_without_a_signing_key(self):
+        self._service_dispatch_checks(unsigned=True, managed=True)
+
+    def _service_dispatch_checks(self, unsigned=False, managed=False):
         import base64
         import hashlib
         archive = self.package()
@@ -430,11 +470,21 @@ class ServiceOTATests(unittest.TestCase):
         payload = json.dumps({'lamp-os': component}).encode()
         metadata = dict(signed=dict(format='autonomous-ota/v1', payload=base64.b64encode(payload).decode(),
                         signature=dict(algorithm='ed25519', value=base64.b64encode(b'x' * 64).decode())))
+        if unsigned:
+            metadata = {'lamp-os': component}
         (self.root / 'metadata.json').write_text(json.dumps(metadata))
-        (self.root / 'bootstrap.json').write_text(json.dumps(dict(metadata_url='test://metadata', signing_public_key=base64.b64encode(b'x' * 32).decode())))
+        config = dict(metadata_url='test://metadata')
+        if not unsigned:
+            config['signing_public_key'] = base64.b64encode(b'x' * 32).decode()
+        (self.root / 'bootstrap.json').write_text(json.dumps(config))
+        if managed:
+            self.install()
+            self.assertEqual(self.m.status('lamp-os'), 'managed')
         source = SCRIPT.read_text()
         for old, new in (
             ('/root/bootstrap/services', self.m.STATE),
+            ('/opt/autonomous-services', self.m.ROOT),
+            ('/var/lib/autonomous-services', self.m.DATA),
             ('/root/bootstrap/rollback', self.root / 'legacy-rollback'),
             ('/root/bootstrap/progress', self.root / 'progress'),
             ('/root/config/bootstrap.json', self.root / 'bootstrap.json'),
@@ -487,19 +537,36 @@ timeout() { shift; if [[ "$1" == */bootstrap-server ]]; then echo "${BOOTSTRAP_P
 test_service_install() { /usr/bin/python3 "$SERVICE_TEST_ROOT/tools.py" install "$@"; }
 export -f id flock curl jq sha256sum openssl timeout test_service_install
 ''')
-        for flag, value, expected in (('BOOTSTRAP_PROTOCOL','0',1), ('BAD_SIGNATURE','1',1),
-                                      ('BAD_DIGEST','1',1), ('BOOTSTRAP_PROTOCOL','1',0)):
-            with self.subTest(flag=flag, value=value):
+        scenarios = [('BOOTSTRAP_PROTOCOL', '0', 1), ('BAD_DIGEST', '1', 1),
+                     ('BOOTSTRAP_PROTOCOL', '1', 0)]
+        if unsigned:
+            scenarios += [('MISSING_SHA', '1', 1), ('INVALID_SHA', '1', 1), ('MISSING_URL', '1', 1)]
+        else:
+            scenarios += [('BAD_SIGNATURE', '1', 1), ('UNSIGNED_FEED', '1', 1)]
+        for flag, value, expected in scenarios:
+            with self.subTest(flag=flag, value=value, unsigned=unsigned, managed=managed):
+                supplied = copy.deepcopy(metadata)
+                if flag == 'UNSIGNED_FEED':
+                    supplied = {'lamp-os': component}
+                elif flag == 'MISSING_SHA':
+                    supplied['lamp-os'].pop('sha256')
+                elif flag == 'INVALID_SHA':
+                    supplied['lamp-os']['sha256'] = 'g' * 64
+                elif flag == 'MISSING_URL':
+                    supplied['lamp-os'].pop('url')
+                (self.root / 'metadata.json').write_text(json.dumps(supplied))
                 (self.root / 'installed.json').unlink(missing_ok=True)
-                result = subprocess.run(['/bin/bash', str(updater), 'lamp-os', '--activate'],
+                (self.root / 'verified').unlink(missing_ok=True)
+                args = ['/bin/bash', str(updater), 'lamp-os'] + ([] if managed else ['--activate'])
+                result = subprocess.run(args,
                     env={**os.environ, 'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'BASH_ENV':str(env_file),
                          'SERVICE_TEST_ROOT':str(self.root), 'SOFTWARE_UPDATE_DETACHED':'1', flag:value},
                     capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
                 self.assertEqual((self.root/'installed.json').exists(), expected==0)
                 if expected==0:
-                    self.assertEqual(json.loads((self.root/'installed.json').read_text())[::3], ['lamp-os','--activate'])
-                    self.assertTrue((self.root/'verified').exists())
+                    self.assertEqual(json.loads((self.root/'installed.json').read_text())[::3], ['lamp-os', '' if managed else '--activate'])
+                    self.assertEqual((self.root/'verified').exists(), not unsigned)
 
     def test_corrupt_registry_fails_closed(self):
         self.m.STATE.mkdir()

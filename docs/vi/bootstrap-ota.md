@@ -1291,9 +1291,16 @@ Version của HAL là file text `hal/VERSION_HAL` (cài thành `/opt/hal/VERSION
 
 ## Thay service qua OTA feed hiện tại
 
-Component khai báo service dùng payload metadata đã ký hiện tại; không có release
+Component khai báo service dùng metadata và chế độ tin cậy OTA hiện tại; không có release
 manifest thứ hai hay key theo kiến trúc `runtime`, `v2`, `v3`. Component mô tả
-service thực tế được phát hành:
+service thực tế được phát hành. Device chưa cấu hình `signing_public_key` dùng feed
+legacy không ký, gồm cả cài service lần đầu và các lần update sau. Gói service vẫn
+bắt buộc URL và SHA-256 hợp lệ trong cả hai chế độ. Nếu device đã có public key,
+chữ ký vẫn bắt buộc; chữ ký thiếu/sai không tự hạ về legacy. Upload dùng thông tin
+gsutil hiện có. Ký release vẫn được hỗ trợ tùy chọn; không ghi đè feed đã ký thành
+không ký chỉ vì shell publish thiếu key.
+
+Ví dụ:
 
 ```json
 {
@@ -1312,10 +1319,10 @@ service thực tế được phát hành:
 Key component phải trùng tên service không có hậu tố `.service`. `replaces` chỉ
 định `hal`/`os-server` hoặc component khai báo service đã đăng ký,
 không phải service hệ thống tùy ý. Bản này chưa hỗ trợ thay các component V1 khác. Cơ chế này không được thay bootstrap. Tên, quyền
-sở hữu và metadata đã ký được kiểm tra trước khi chuyển service. Các trường này
+sở hữu và metadata được kiểm tra trước khi chuyển service. Các trường này
 không được chứa lệnh shell hay hook thực thi tùy ý.
 
-Máy tự chuyển lần đầu khi mục service trong metadata đã ký đặt
+Máy tự chuyển lần đầu khi mục service trong metadata đặt
 `activate_by_device[device_type]` thành `true` và có ngưỡng
 `min_version_by_device[device_type]` hợp lệ, không rỗng, không lớn hơn version
 đang phát hành. Người vận hành release bật bằng promote; người dùng device
@@ -1327,8 +1334,8 @@ make promote-service COMPONENT=lamp-os FOR=lamp V=0.1.0 ACTIVATE=1
 
 Bootstrap tìm các service được promote rồi gọi
 `software-update lamp-os --activate-promoted`. Updater kiểm tra lại metadata
-đã ký vừa tải và loại device thực tế trước khi dùng giao dịch chuyển service
-hiện có. Metadata không ký, thiếu chỉ định loại máy, ngưỡng không hợp lệ,
+vừa tải và loại device thực tế trước khi dùng giao dịch chuyển service
+hiện có. Thiếu chỉ định loại máy, ngưỡng không hợp lệ,
 xung đột quyền sở hữu hoặc updater cũ không cho phép cài lần đầu. Phải đưa
 bootstrap và updater tương thích xuống device trước khi bật chỉ định trên feed.
 
@@ -1385,15 +1392,15 @@ kích hoạt trên device, reboot/mất điện và hành vi voice/hardware th�
 
 ### Phát hành component service
 
-Build và kiểm chứng gói riêng, sau đó phát hành bằng thông tin ký hiện có
-(`OTA_SIGNING_PRIVATE_KEY`, `OTA_SIGNING_KEY_ID`):
+Build và kiểm chứng gói riêng, sau đó phát hành bằng thông tin đăng nhập GCS
+hiện có. Ký là tùy chọn, giống các component OTA legacy:
 
 ```bash
 make upload-service COMPONENT=lamp-os V=0.1.0 PACKAGE=/path/lamp-os.zip REPLACES='hal os-server'
 make promote-service COMPONENT=lamp-os FOR=lamp V=0.1.0 ACTIVATE=1
 ```
 
-Publisher bắt buộc metadata đã ký, kiểm tra gói, giữ nguyên ngưỡng promote và các
+Publisher kiểm tra gói và SHA-256, giữ nguyên ngưỡng promote và các
 component khác, đồng thời từ chối đổi tổ chức service dưới key cũ. URL gói chứa
 hash nội dung. Không được dùng lại version với nội dung khác khi version đó đang
 là bản hiện tại trên feed. Chạy các lần publish tuần tự như các script release
@@ -1405,43 +1412,69 @@ và ghi nhận version bị từ chối để polling không thử lại liên t
 được thông tin từ chối, journal recovery vẫn được giữ lại. `ACTIVATE=0` giữ
 nguyên các ngưỡng version hiện có.
 
-### Build supervisor V2 từ main
-
-Từ checkout có công cụ release, chạy:
+### Build và publish gói service V2 đầy đủ
 
 ```bash
 make upload-lamp-os
 ```
 
-Lệnh fetch `refs/heads/lamp-voice` từ `origin` của checkout vào repository tạm
-riêng, cố định commit vừa lấy rồi chỉ giải nén `lampOS/`. Không đổi branch hiện
-tại và không lấy source chưa commit. Dùng Rust toolchain và lockfile của workspace
-đó để chạy
-`cargo zigbuild --locked --release --target aarch64-unknown-linux-gnu -p lamp-keeper`.
-Máy build cần Cargo/rustup, cargo-zigbuild, Zig, target
-`aarch64-unknown-linux-gnu` của toolchain được pin và `gsutil` đã đăng nhập.
+Lệnh fetch và cố định commit `lamp-voice` từ `origin` trong thư mục source riêng.
+Toàn bộ binary workspace Rust và adapter lifecycle OTA được build trong Docker
+Linux ARM64 dùng toolchain/lockfile của source. Máy host không cần Cargo/Zig nữa.
+Cần Docker hỗ trợ Linux ARM64, git, curl, Python 3.10+ và gsutil đã đăng nhập.
+`OTA_SIGNING_PRIVATE_KEY` / `OTA_SIGNING_KEY_ID` là tùy chọn. Builder Debian bookworm yêu cầu
+runtime ARM64 tương thích Debian 12; đây không phải image chung cho mọi robot.
 
-Binary quản lý được upload với tên `lamp-os`, kèm `build.json`, `VERSION` và `SHA256SUMS`,
-vào `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/services/lamp-os/builds/<version>/<commit>/<sha256>/`.
-Mặc định vẫn là bucket `s3-autonomous-upgrade-3`, prefix `os`; có thể override qua
-biến môi trường như các lệnh release khác. Lệnh kiểm tra ELF ARM64 trước upload,
-sau đó tải lại binary đã lưu để đối chiếu SHA-256 trước khi báo thành công.
-Đây là kiểm tra build và nguồn gốc, chưa phải kiểm chứng trên hardware.
+ZIP chứa `VERSION`, `bin/service` (adapter lifecycle OTA bằng Rust),
+`bin/lamp-keeper`, các binary V2 cần thiết kể cả worker turn-end, model/ONNX Runtime
+được pin SHA, thư viện liên kết ngoài glibc, tài nguyên character/policy, template
+unit và manifest checksum toàn bộ file. Không lấy secret hoặc calibration của máy
+test đưa vào gói. Có thể mang binary `lamp-update`/`lamp-surround` nhưng không kích
+hoạt hai service update độc lập đó: bootstrap quản lý update release này.
 
-Artifact bước đầu này là supervisor `lamp-keeper`, sau này đặt thành `bin/service`
-trong gói service `lamp-os`. **Chưa phải ZIP OTA V2 hoàn chỉnh**: phải đóng gói và
-kiểm chứng riêng các binary con, model, config/calibration của device và các unit
-đã render. Lệnh không sửa OTA metadata, ngưỡng version hay chỉ định kích hoạt.
-Chỉ dùng `upload-service` khi gói đầy đủ đã sẵn sàng; upload này không thay đổi V1
-hoặc các loại device khác.
+`system/VERSION_LAMP_OS` tự tăng patch sau khi build gói hoàn chỉnh. VERSION trong
+ZIP và package.json ghi version; package.json ghi cả commit source. Publish dùng lại
+`upload-service`: một ZIP theo hash ở
+`gs://${GCS_BUCKET}/${BUCKET_PREFIX}/services/lamp-os/<sha256>.zip` và một entry
+`lamp-os` trong OTA JSON, khai báo `replaces: ["hal", "os-server"]`.
+Giữ nguyên ngưỡng promote/chỉ định activation đã có; upload không thực hiện promote
+kích hoạt. Mặc định bucket `s3-autonomous-upgrade-3`, prefix `os`. Chạy release tuần
+tự và giữ version-file đã thay đổi trong lịch sử release.
 
-`system/VERSION_LAMP_OS` theo dõi version release riêng, độc lập HAL và bootstrap.
-File khởi tạo `0.0.0`; sau khi build binary hợp lệ, `upload-lamp-os` tự tăng patch
-(lần upload đầu là `0.0.1`). Version được ghi vào `build.json`, file `VERSION`
-upload kèm và đường dẫn GCS. Keeper đọc file `VERSION` của release để trả health
-cho OTA; lệnh không sửa version crate Rust. Giống các lệnh release hiện có, nếu
-upload lỗi sau bước tăng version thì file vẫn giữ số mới. Chạy release tuần tự,
-giữ lại version file đã cập nhật trong lịch sử release; không tự tăng bằng tay.
+Build kiểm tra local, không publish hoặc tăng version-file:
 
-Nếu PATH của shell chưa có Cargo, lệnh còn kiểm tra bản đã cài trong
-`${CARGO_HOME:-$HOME/.cargo}/bin`. Lệnh không tự cài Rust.
+```bash
+LAMP_OS_BUILD_ONLY=1 LAMP_OS_OUTPUT=/path/lamp-os.zip make upload-lamp-os
+```
+
+ZIP chung vẫn cần chuẩn bị device: `/etc/lampOS/package-profile.json` thuộc root,
+không cho group/others ghi, có `unit_id`, map `substitutions` cho các placeholder
+được manifest khai báo và `required_paths` tùy chọn. Pose servo, đường dẫn hardware
+và service account phải lấy đúng máy. Credentials riêng trong
+`/etc/lampOS/voice/provider.json` và config controls được cấp riêng. Thiếu điều kiện
+hoặc sai hostname sẽ fail preflight. Lệnh này chưa tự chuyển credentials/calibration
+V1. State V2 nằm ngoài thư mục dữ liệu riêng của updater không được snapshot bởi
+updater; đổi schema ở đó cần chính sách migration/rollback tương thích được kiểm
+chứng riêng. Xem manifest trong gói để biết điều kiện cụ thể trước khi chọn máy migrate.
+
+Adapter chỉ tạo unit con/drop-in trong `/run/systemd/system`, ràng buộc vào
+`lamp-os`, ghi journal trước khi sửa. Không enable hay mask bền vững unit con/V1.
+Khi dừng bình thường hoặc qua `ExecStopPost`, cleanup chỉ xoá file do nó tạo mà
+nội dung còn nguyên; lỗi dừng/cleanup không được coi rollback đã hoàn thành.
+Marker `SERVICE_CLEANUP` bật thao tác cố định này; updater còn gọi cleanup đồng
+bộ sau khi stop (kể cả recovery), không suy ra thành công chỉ từ trạng thái systemd; gói cũ không có marker giữ hành
+vi cũ. Unit cấp cao cho phép 60 giây shutdown. Phải cập nhật updater trước khi
+cài gói: adapter kiểm tra khả năng cleanup và từ chối an toàn với updater cũ.
+Keeper chạy như process con được theo dõi, không tự cài unit nữa. Bus chung
+`/run/lampos-bus` được giữ tới reboot; cleanup không xoá đệ quy dữ liệu IPC.
+
+Health trả PID/version adapter và trạng thái active của các unit con với kiểm tra
+độ mới. Không chứng minh voice/provider hay an toàn chuyển động thực tế. Cần test
+activation, reboot/gián đoạn và rollback trên device trước khi promote migration.
+Gói chung không có nghĩa được phép chuyển các robot khác hoặc toàn bộ Lamp.
+
+Inventory còn mang `lamp-selftest`, `lamp-settings` và `lamp-setup` khi upstream
+build chúng; thêm executable không tự bật service hay chạy self-test/reset.
+`lamp-memory-fixture`, `lamp-records-fixture` và CLI đo `lamp-same-voice pairs`
+hiện là công cụ phát triển nên không đưa vào gói. Binary chưa phân loại vẫn làm
+packaging báo lỗi để không âm thầm bỏ sót runtime mới.

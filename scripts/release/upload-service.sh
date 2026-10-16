@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# Publish a prebuilt service package; activation is controlled by signed per-device promotion.
+# Publish a prebuilt service package; activation is controlled by explicit per-device promotion.
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
 source "${RELEASE_DIR}/ota-metadata.sh"
 : "${COMPONENT:?COMPONENT is required}"
 : "${V:?V is required}"
 : "${PACKAGE:?PACKAGE is required}"
-: "${OTA_SIGNING_PRIVATE_KEY:?Service metadata must be signed}"
-: "${OTA_SIGNING_KEY_ID:?OTA_SIGNING_KEY_ID is required}"
-[ -r "$OTA_SIGNING_PRIVATE_KEY" ] || { echo 'Signing key is not readable' >&2; exit 1; }
+ota_metadata_signing_preflight
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp "$PACKAGE" "$tmp/package.zip"
 metadata="gs://${GCS_BUCKET}/${BUCKET_PREFIX}/ota/metadata.json"
 # Never replace an existing feed with an empty document on a fetch failure.
 gsutil cp "$metadata" "$tmp/envelope.json"
+ota_metadata_preserve_trust "$tmp/envelope.json"
 ota_metadata_unpack "$tmp/envelope.json" "$tmp/payload.json"
 sha=$(ota_artifact_sha256 "$tmp/package.zip")
 url="https://storage.googleapis.com/${GCS_BUCKET}/${BUCKET_PREFIX}/services/${COMPONENT}/${sha}.zip"
