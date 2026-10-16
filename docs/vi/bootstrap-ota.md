@@ -1310,6 +1310,7 @@ Ví dụ:
     "sha256": "<artifact SHA-256>",
     "min_version_by_device": {"lamp": "0.1.0"},
     "activate_by_device": {"lamp": true},
+    "activation_release_by_device": {"lamp": {"version": "0.1.0", "sha256": "<same artifact SHA-256>"}},
     "service": "lamp-os",
     "replaces": ["hal", "os-server"]
   }
@@ -1325,7 +1326,10 @@ không được chứa lệnh shell hay hook thực thi tùy ý.
 Máy tự chuyển lần đầu khi mục service trong metadata đặt
 `activate_by_device[device_type]` thành `true` và có ngưỡng
 `min_version_by_device[device_type]` hợp lệ, không rỗng, không lớn hơn version
-đang phát hành. Người vận hành release bật bằng promote; người dùng device
+đang phát hành, đồng thời `activation_release_by_device[device_type]` phải khớp
+chính xác version và SHA-256 hiện tại. Promote cũ chỉ có boolean không cho phép
+migrate. `ACTIVATE=1` chọn version hiện tại trên feed và ghi binding đó.
+Người vận hành release bật bằng promote; người dùng device
 không cần SSH hay chạy CLI:
 
 ```bash
@@ -1338,9 +1342,13 @@ vừa tải và loại device thực tế trước khi dùng giao dịch chuyể
 hiện có. Thiếu chỉ định loại máy, ngưỡng không hợp lệ,
 xung đột quyền sở hữu hoặc updater cũ không cho phép cài lần đầu. Phải đưa
 bootstrap và updater tương thích xuống device trước khi bật chỉ định trên feed.
+Migrate `lamp-os` tự động lần đầu còn yêu cầu protocol preflight và cleanup;
+updater cũ chỉ có activation bị từ chối trước cutover.
 
-Chỉ publish không tự kích hoạt. Promote không truyền `ACTIVATE` giữ nguyên
-chỉ định kích hoạt đã có. `ACTIVATE=0 FOR=lamp` ngừng các lần cài đầu tiếp theo
+Publish version/artifact mới xoá cờ activation và binding; cần promote kích hoạt
+rõ ràng lại cho artifact đó. Publish lại đúng version/hash giữ nguyên chúng.
+Promote không truyền `ACTIVATE` giữ nguyên chỉ định đã có.
+`ACTIVATE=0 FOR=lamp` xoá binding và ngừng các lần cài đầu tiếp theo
 cho Lamp; không gỡ hay rollback service đã hoạt động. Phạm vi là loại device,
 không phải ID từng máy hoặc tỷ lệ rollout.
 
@@ -1351,16 +1359,32 @@ Các component độc lập có thể cùng tồn tại. Lệnh thủ công
 `sudo software-update lamp-os --activate` vẫn dùng được để kiểm thử, nhưng
 không phải bước bắt buộc khi chuyển toàn bộ thiết bị.
 
+Refresh updater cũng giữ khả năng preflight và cleanup đã cài: script cũ từ feed không được làm mất các khả năng này, kể cả khi device vẫn chạy V1.
+
+
 ### Hợp đồng adapter của gói
 
 ZIP chứa `VERSION` khớp version metadata, executable `bin/service` và các
 worker/tài nguyên đi kèm. Updater tạo systemd unit; gói không cung cấp systemd
 unit tùy ý. Entrypoint hỗ trợ các đối số cố định:
 
+- `bin/service prepare`: bắt buộc cho migrate `lamp-os` lần đầu; ZIP phải có
+  `SERVICE_PREFLIGHT` chứa `1`. Chuẩn bị dữ liệu candidate riêng và kiểm tra
+  config/prerequisites, không dừng chủ sở hữu hiện tại hoặc tác động hardware.
+  Các service cũ khác có thể opt-in bằng cùng marker.
 - `bin/service serve`: quản lý component và các process con của nó.
 - `bin/service health`: hỏi component đang chạy và trả JSON chứa `ready: true`,
   `version` khớp và `pid` của supervisor đang chạy. Updater đối chiếu PID với
   MainPID của systemd trong thời hạn giới hạn.
+- `bin/service cleanup`: gói có `SERVICE_CLEANUP=1` chạy lệnh cố định này sau stop
+  để dọn tài nguyên lifecycle thuộc chính nó. Cleanup có timeout và phải thành
+  công trước khi recovery bật lại chủ sở hữu hardware cũ.
+
+ZIP V2 tiếp theo phải triển khai và kiểm chứng `prepare`, `serve`, `health` cùng
+lifecycle stop/cleanup. Chỉ cập nhật bootstrap/software-update không bổ sung
+chuyển credentials, calibration hay settings V1 vào ZIP hiện có. ZIP `lamp-os`
+cũ thiếu `SERVICE_PREFLIGHT=1` bị từ chối migrate lần đầu; không promote chỉ vì
+updater đã nâng cấp.
 
 Adapter health không được bật runtime thứ hai hoặc di chuyển hardware. Readiness
 chỉ chứng minh các kiểm tra khởi động mà gói khai báo, không chứng minh hội thoại
@@ -1370,10 +1394,15 @@ hiện có trở thành gói cài được.
 
 ### Giới hạn chuyển đổi, dữ liệu và rollback
 
-Tải và kiểm tra gói trước khi dừng service hiện tại. Updater ghi trạng thái sở
+Tải, giải nén và chạy `prepare` được khai báo trước khi dừng service hiện tại.
+Chuẩn bị lỗi thì xoá staging và giữ chủ sở hữu cũ chạy. Với update service đã
+cài, prepare snapshot dữ liệu riêng lần đầu; sau khi dừng process ghi, lấy snapshot
+nhất quán lần hai và prepare lại trước khi chuyển. Lỗi giai đoạn hai dùng recovery
+có journal. Updater ghi trạng thái sở
 hữu và phục hồi, dừng các chủ sở hữu cũ được khai báo và xác nhận đã dừng trước
-khi bật service thay thế. Khi lỗi hoặc phục hồi giao dịch bị gián đoạn, nó khôi
-phục cấu hình trước đó. Trạng thái sở hữu bền vững cũng ngăn OTA cũ hoặc reboot
+khi bật service thay thế. Khi lỗi hoặc phục hồi giao dịch bị gián đoạn, nó thử
+khôi phục cấu hình trước đó. Lỗi stop, cleanup hoặc restart giữ journal và chặn
+cutover; không có nghĩa V1 đã được khôi phục thành công. Trạng thái sở hữu bền vững cũng ngăn OTA cũ hoặc reboot
 bật lại các service đã bị thay thế. Rollback không được bật service tổ tiên
 khi service thay thế nó vẫn đang hoạt động.
 
@@ -1382,6 +1411,14 @@ credentials, calibration, memory hay config của V1. Bên đóng gói phải đ
 migration đó riêng trước khi deploy. Cập nhật giữ snapshot dữ liệu riêng để
 rollback; rollback có thể mất các thay đổi ghi sau snapshot. Gói không được sửa
 dữ liệu V1 dùng chung rồi coi rollback hoàn tất chỉ vì binary cũ khởi động được.
+
+Lần kích hoạt thành công đầu tiên giữ checkpoint legacy riêng, không bị update
+service sau đó ghi đè. `software-update rollback lamp-os` chọn release trước;
+`software-update rollback-to-legacy lamp-os` khôi phục quyền sở hữu/trạng thái
+chạy legacy ban đầu kể cả sau update V2. Thiếu/sai checkpoint thì từ chối, không
+tự đoán trạng thái cũ. Bootstrap chạy pending recovery lúc startup, trước khi
+chờ metadata URL hoặc parse poll settings. Recovery lỗi thì dừng startup và giữ
+journal để thử lại.
 
 Bootstrap vẫn độc lập và nâng cấp được. Khai báo tương thích ngăn thay bootstrap
 hoặc updater bằng bản cũ không hiểu quyền sở hữu service và phục hồi. Kiểm tra
@@ -1402,14 +1439,17 @@ make promote-service COMPONENT=lamp-os FOR=lamp V=0.1.0 ACTIVATE=1
 
 Publisher kiểm tra gói và SHA-256, giữ nguyên ngưỡng promote và các
 component khác, đồng thời từ chối đổi tổ chức service dưới key cũ. URL gói chứa
-hash nội dung. Không được dùng lại version với nội dung khác khi version đó đang
-là bản hiện tại trên feed. Chạy các lần publish tuần tự như các script release
-hiện có; cập nhật metadata chưa phải giao dịch hỗ trợ nhiều người ghi đồng thời.
-Promote với `ACTIVATE=1` cho phép tự cài lần đầu trên loại device được chọn;
+hash nội dung. Từ chối publish version thấp hơn feed hoặc dùng lại version hiện
+tại với nội dung khác. Mọi script ghi metadata release đọc generation GCS cố định
+và publish với điều kiện generation còn khớp. Có người ghi đồng thời thì huỷ
+publication; chạy lại từ lần đọc feed mới, không ghi đè promote bằng dữ liệu cũ.
+Credentials GCS hiện có và signing tùy chọn giữ nguyên. Promote `ACTIVATE=1`
+cho phép tự cài lần đầu đúng artifact trên loại device được chọn;
 các lần cập nhật tiếp theo vẫn tuân theo ngưỡng promote.
-Nếu kích hoạt tự động lỗi sau khi bắt đầu chuyển, recovery khôi phục service cũ
-và ghi nhận version bị từ chối để polling không thử lại liên tục. Nếu không ghi
-được thông tin từ chối, journal recovery vẫn được giữ lại. `ACTIVATE=0` giữ
+Nếu kích hoạt tự động lỗi sau khi bắt đầu chuyển, recovery thử khôi phục service
+cũ và ghi version bị từ chối để polling không thử liên tục. Lỗi stop, cleanup,
+khôi phục hoặc ghi thông tin từ chối sẽ giữ journal; có thể vẫn cần chẩn đoán
+thủ công. `ACTIVATE=0` giữ
 nguyên các ngưỡng version hiện có.
 
 ### Build và publish gói service V2 đầy đủ
@@ -1437,9 +1477,10 @@ ZIP và package.json ghi version; package.json ghi cả commit source. Publish d
 `upload-service`: một ZIP theo hash ở
 `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/services/lamp-os/<sha256>.zip` và một entry
 `lamp-os` trong OTA JSON, khai báo `replaces: ["hal", "os-server"]`.
-Giữ nguyên ngưỡng promote/chỉ định activation đã có; upload không thực hiện promote
-kích hoạt. Mặc định bucket `s3-autonomous-upgrade-3`, prefix `os`. Chạy release tuần
-tự và giữ version-file đã thay đổi trong lịch sử release.
+Giữ nguyên ngưỡng promote, nhưng artifact mới xoá cờ activation/binding và cần
+promote kích hoạt lại. Mặc định bucket `s3-autonomous-upgrade-3`, prefix `os`. Giữ
+version-file đã thay đổi trong lịch sử release; checkout cũ không thể publish
+version thấp hơn đè lên feed.
 
 Build kiểm tra local, không publish hoặc tăng version-file:
 

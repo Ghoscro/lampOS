@@ -1345,6 +1345,7 @@ A component describes the actual service being shipped:
     "sha256": "<artifact SHA-256>",
     "min_version_by_device": {"lamp": "0.1.0"},
     "activate_by_device": {"lamp": true},
+    "activation_release_by_device": {"lamp": {"version": "0.1.0", "sha256": "<same artifact SHA-256>"}},
     "service": "lamp-os",
     "replaces": ["hal", "os-server"]
   }
@@ -1359,7 +1360,10 @@ command line or shell hook is accepted from these fields.
 
 Initial migration is automatic when the service entry explicitly sets
 `activate_by_device[device_type]` to `true` and has a nonempty, valid
-`min_version_by_device[device_type]` no greater than the published version.
+`min_version_by_device[device_type]` no greater than the published version, plus
+`activation_release_by_device[device_type]` matching the exact published version
+and SHA-256. An old boolean-only promotion does not authorize migration.
+`ACTIVATE=1` selects the current published version and writes that binding.
 The release operator enables this through promotion; the device user does not
 need SSH or a CLI command:
 
@@ -1373,10 +1377,14 @@ fetched metadata and actual device type again before using the existing
 service transition transaction. Missing device targeting,
 invalid promotion floors, conflicting ownership, and obsolete updater support
 cannot authorize a first installation. Compatible bootstrap and updater releases
-must reach devices before enabling activation in the feed.
+must reach devices before enabling activation in the feed. Initial automatic
+`lamp-os` migration requires updater preflight and cleanup protocols as well as
+activation support; older activation-only updaters are rejected before cutover.
 
-Publishing alone does not activate a service. Promotion without `ACTIVATE`
-preserves existing activation settings. `ACTIVATE=0 FOR=lamp` disables future
+Publishing a changed version/artifact clears activation flags and bindings; the
+new artifact needs a fresh explicit activation promotion. Republishing the same
+version/hash preserves them. Promotion without `ACTIVATE` preserves existing
+activation settings. `ACTIVATE=0 FOR=lamp` removes its binding and disables future
 first installations for Lamp; it does not uninstall or roll back an active
 service. The flag targets a device type, not a device ID or percentage rollout.
 
@@ -1387,6 +1395,8 @@ activation. Independent service components can coexist. The manual operator
 command `sudo software-update lamp-os --activate` remains available for testing;
 it is not required for fleet migration.
 
+Updater refresh also preserves installed preflight and cleanup capabilities: a stale published script cannot remove them, including while the device still runs V1.
+
 ### Package adapter contract
 
 The ZIP contains `VERSION` matching the metadata version, executable
@@ -1394,10 +1404,23 @@ The ZIP contains `VERSION` matching the metadata version, executable
 systemd unit; packages do not supply arbitrary systemd units. The entrypoint
 supports fixed arguments:
 
+- `bin/service prepare`: required for initial `lamp-os` migration, with
+  `SERVICE_PREFLIGHT` containing `1` in the ZIP. Prepare isolated candidate data
+  and validate configuration/prerequisites without stopping current owners or
+  touching hardware. Other existing services can opt in with the same marker.
 - `bin/service serve`: supervise this component and its child processes.
 - `bin/service health`: query the running component and return JSON containing
   `ready: true`, the matching `version`, and its running supervisor `pid`. The
   updater checks that PID against systemd's MainPID under a bounded deadline.
+- `bin/service cleanup`: packages with `SERVICE_CLEANUP=1` use this fixed command
+  after stop to remove only their own lifecycle resources. Cleanup is bounded and
+  must succeed before recovery restarts previous hardware owners.
+
+The future V2 ZIP must implement and qualify `prepare`, `serve`, `health` and
+its stop/cleanup lifecycle. Updating bootstrap/software-update alone does not add
+V1-to-V2 credentials, calibration or settings conversion to the existing ZIP.
+An existing `lamp-os` ZIP without `SERVICE_PREFLIGHT=1` is rejected for initial
+migration; do not promote it merely because the updater has been upgraded.
 
 The health adapter must not start a second runtime or move hardware. Readiness
 proves only the package's declared startup checks, not successful conversation,
@@ -1407,10 +1430,16 @@ make any existing V2 build installable.
 
 ### Transition, data and rollback boundaries
 
-Download and validate the candidate before stopping current services. The updater
+Download, extract and run declared `prepare` before stopping current services.
+Preparation failure removes staging and leaves the old owners running. For an
+installed service update, prepare an initial private-data snapshot; after stopping
+writers, take a second consistent snapshot and prepare it again before switching.
+A failure at that second stage uses journaled recovery. The updater
 records the previous ownership and recovery state, stops the declared old owners
 and verifies they have stopped before starting the replacement. On failure, or
-recovery of an interrupted transition, it restores the previous configuration.
+recovery of an interrupted transition, it attempts to restore the previous
+configuration. Failed stop, cleanup or restart leaves the recovery journal and
+blocks cutover; it is not proof that V1 has already recovered.
 Persisted ownership also prevents legacy OTA paths or reboot from resurrecting
 superseded hardware owners. Rollback must not restart an ancestor while its
 replacement remains active.
@@ -1421,6 +1450,14 @@ team must define that migration separately before deployment. Updates retain
 private state snapshots for rollback; rolling back can discard writes made since
 the snapshot. Packages must not mutate shared V1 data and then claim rollback is
 complete merely because the old binary starts.
+
+The first successful activation retains a separate legacy checkpoint that later
+service updates do not overwrite. `software-update rollback lamp-os` selects the
+previous release; `software-update rollback-to-legacy lamp-os` restores the initial
+legacy ownership/running state even after V2 updates. A missing or mismatched
+checkpoint fails closed rather than inventing the previous state. Bootstrap runs
+pending recovery at startup before waiting for a metadata URL or parsing poll
+settings. A recovery error stops startup; the journal remains for retry.
 
 Bootstrap remains independent and updateable. A compatibility declaration prevents
 replacing it or the updater with an older implementation that does not understand
@@ -1442,15 +1479,18 @@ make promote-service COMPONENT=lamp-os FOR=lamp V=0.1.0 ACTIVATE=1
 
 The publisher validates the package and its SHA-256, preserves existing
 promotion floors and other components, and rejects topology changes under an
-existing key. Package URLs include the content hash. A version cannot be reused
-with different content while it is the feed's current version. Serialize release
-publishing as with the existing release scripts; metadata publishing is not a
-concurrent multi-writer transaction. Promotion with `ACTIVATE=1` authorizes automatic first installation on the
+existing key. Package URLs include the content hash. Publishing an older version
+than the feed is rejected; the current version cannot be reused with different
+content. All release metadata writers read an immutable GCS generation and publish
+with a generation-match precondition. Concurrent changes abort publication; retry
+from a fresh feed read, never overwrite another operator's promotion with stale
+metadata. Existing GCS authentication and optional signing are unchanged.
+Promotion with `ACTIVATE=1` authorizes automatic first installation of that artifact on the
 selected device type; later updates continue to follow the promotion floor.
-If an automatic activation fails after the transition starts, recovery restores
-the previous services and records the rejected version so polling does not keep
-retrying it. A pending recovery journal is retained if that rejection cannot be
-persisted. `ACTIVATE=0` preserves existing version floors.
+If automatic activation fails after the transition starts, recovery attempts to
+restore previous services and records the rejected version so polling does not
+keep retrying it. The pending journal is retained when stop, cleanup, restoration
+or recording the rejection fails; manual diagnosis may still be required. `ACTIVATE=0` preserves existing version floors.
 
 ### Build and publish the complete V2 service package
 
@@ -1479,9 +1519,10 @@ The ZIP's VERSION and package.json contain the version; package.json also record
 the frozen source commit. Publication reuses `upload-service`: one content-addressed
 ZIP in `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/services/lamp-os/<sha256>.zip` and one
 `lamp-os` entry in the existing OTA JSON, with `replaces: ["hal", "os-server"]`.
-Existing promotion floors and activation settings are preserved; upload does not
-issue an activation promotion. Defaults remain bucket `s3-autonomous-upgrade-3`,
-prefix `os`. Serialize releases and retain the version-file change in release history.
+Existing promotion floors are preserved, but a changed artifact clears activation
+flags/bindings and requires fresh activation promotion. Defaults remain bucket
+`s3-autonomous-upgrade-3`, prefix `os`. Retain version-file changes in release
+history; a stale checkout cannot publish an older version over the feed.
 
 For local artifact validation without publishing or advancing the version file:
 

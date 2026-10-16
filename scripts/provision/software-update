@@ -2,6 +2,7 @@
 # Service OTA protocol: 1
 # Service OTA activation protocol: 1
 # Service OTA cleanup protocol: 1
+# Service OTA preflight protocol: 1
 set -e
 # Metadata URL from the bootstrap config; OTA_METADATA_URL env overrides. No default.
 BOOTSTRAP_JSON="/root/config/bootstrap.json"
@@ -33,7 +34,7 @@ REGISTRY = STATE / 'ownership.json'
 JOURNAL = STATE / 'transition.json'
 LEGACY = {'hal', 'os-server'}
 RESERVED = LEGACY | {'hermes', 'openclaw', 'codex', 'claudecode', 'picoclaw', 'opencode', 'bootstrap', 'bootstrap-server', 'device', 'web', 'nginx', 'claude-desktop-buddy',
-                     'ssh', 'sshd', 'dbus', 'systemd', 'networking', 'network-manager', 'system', 'agent', 'devices', 'signed', 'recover', 'rollback'}
+                     'ssh', 'sshd', 'dbus', 'systemd', 'networking', 'network-manager', 'system', 'agent', 'devices', 'signed', 'recover', 'rollback', 'rollback-to-legacy'}
 NAME = re.compile(r'[a-z][a-z0-9-]{0,47}')
 
 
@@ -145,7 +146,9 @@ def run(*args, timeout=45, **kwargs):
 
 
 def systemctl(*args):
-    return run('systemctl', *args)
+    # The unit permits a 60-second stop including adapter cleanup. Do not kill
+    # the waiting client at 45 seconds while systemd is still completing it.
+    return run('systemctl', *args, timeout=90 if args and args[0] == 'stop' else 45)
 
 
 def service_state(key):
@@ -328,7 +331,7 @@ def snapshot(source, destination):
 
 def journal_read():
     journal = json.loads(JOURNAL.read_text())
-    if journal.get('format') != 1 or not name(journal.get('key')) or journal.get('phase') not in ('pending', 'committed') or journal.get('action') not in ('install', 'rollback'):
+    if journal.get('format') != 1 or not name(journal.get('key')) or journal.get('phase') not in ('pending', 'committed') or journal.get('action') not in ('install', 'rollback', 'rollback-to-legacy'):
         raise RuntimeError('Invalid service transaction journal')
     validate(journal['before'])
     validate(journal['after'])
@@ -398,10 +401,17 @@ def switch(journal, direction):
 
 def finalize(journal):
     history = STATE / 'history' / (journal['key'] + '.json')
+    checkpoint = STATE / 'activation' / (journal['key'] + '.json')
     if journal['action'] == 'install':
+        # Architecture rollback survives ordinary version updates and rollback.
+        if journal['key'] not in journal['before']['components']:
+            durable(checkpoint, json.dumps(journal))
         durable(history, json.dumps(journal))
-    elif history.exists():
-        remove(history)
+    else:
+        if history.exists():
+            remove(history)
+        if journal['key'] not in journal['after']['components'] and checkpoint.exists():
+            remove(checkpoint)
     remove(JOURNAL)
 
 
@@ -486,7 +496,7 @@ def prune():
     registries = [load()]
     history = STATE / 'history'
     if history.exists():
-        for path in history.glob('*.json'):
+        for path in list(history.glob('*.json')) + list((STATE / 'activation').glob('*.json')):
             item = json.loads(path.read_text())
             registries.extend((validate(item['before']), validate(item['after'])))
     references = {entry[field] for registry in registries for entry in registry['components'].values()
@@ -523,6 +533,13 @@ def promoted_activation(key, entry):
                 device_type = device_type.strip()
     if not isinstance(device_type, str) or not device_type or activations.get(device_type) is not True:
         raise RuntimeError('Service activation is not promoted for this device type')
+    bindings = entry.get('activation_release_by_device')
+    binding = bindings.get(device_type) if isinstance(bindings, dict) else None
+    digest = entry.get('sha256')
+    if (not isinstance(binding, dict) or binding.get('version') != entry.get('version')
+            or not isinstance(digest, str) or re.fullmatch('[a-f0-9]{64}', digest) is None
+            or binding.get('sha256') != digest):
+        raise RuntimeError('Promoted activation is not bound to this exact release')
     floors = entry.get('min_version_by_device')
     if not isinstance(floors, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in floors.items()):
         raise RuntimeError('Invalid min_version_by_device map')
@@ -542,6 +559,36 @@ def promoted_activation(key, entry):
     return True
 
 
+def preserve_activation_checkpoint(key, before):
+    checkpoint = STATE / 'activation' / (key + '.json')
+    if checkpoint.exists():
+        return
+    history = STATE / 'history' / (key + '.json')
+    if not history.is_file():
+        return
+    original = json.loads(history.read_text())
+    validate(original['before'])
+    validate(original['after'])
+    if (key not in original['before']['components']
+            and original['after']['components'].get(key) == before['components'].get(key)):
+        # Recover a pre-checkpoint installation only while its original activation
+        # history still exists. Never invent the prior legacy running state.
+        durable(checkpoint, json.dumps(original))
+
+
+def prepare_candidate(key, release, data, required=False):
+    marker = release / 'SERVICE_PREFLIGHT'
+    if not marker.exists():
+        if required:
+            raise RuntimeError('Initial lamp-os migration requires SERVICE_PREFLIGHT=1')
+        return
+    if marker.read_text().strip() != '1':
+        raise RuntimeError('Unsupported service preflight contract')
+    run(str(release / 'bin/service'), 'prepare', timeout=120,
+        cwd=str(data), env={**os.environ, 'AUTONOMOUS_SERVICE_NAME': key,
+                           'AUTONOMOUS_SERVICE_DATA': str(data)})
+
+
 def install(key, entry, archive, activate, promoted=False):
     before = load()
     replaces = metadata(key, entry, before)
@@ -552,6 +599,8 @@ def install(key, entry, archive, activate, promoted=False):
         raise RuntimeError('Unrecovered service transition')
     if old and service_state(key).get('ActiveState') != 'active':
         raise RuntimeError('Refusing to wake an intentionally stopped service')
+    if old:
+        preserve_activation_checkpoint(key, before)
     prune()
     token = uuid.uuid4().hex
     release = ROOT / key / 'releases' / token
@@ -562,6 +611,19 @@ def install(key, entry, archive, activate, promoted=False):
         extract(archive, release, entry['version'])
     except BaseException:
         shutil.rmtree(release)
+        raise
+    # Preparation must succeed without stopping current hardware owners. The
+    # updater publishes neither units nor ownership until this finishes.
+    try:
+        if old:
+            snapshot(old['data'], data)
+        else:
+            data.mkdir(mode=0o700)
+        prepare_candidate(key, release, data, required=key == 'lamp-os' and not old)
+    except BaseException:
+        shutil.rmtree(release)
+        if data.exists():
+            shutil.rmtree(data)
         raise
     affected = sorted({key} | set(replaces))
     before_running = []
@@ -589,9 +651,11 @@ def install(key, entry, archive, activate, promoted=False):
         for owner in affected:
             stop(owner)
         if old:
+            # Refresh the snapshot after writers stop; rerun the same validation
+            # against this consistent data before switching to the candidate.
+            shutil.rmtree(data)
             snapshot(old['data'], data)
-        else:
-            data.mkdir(mode=0o700)
+            prepare_candidate(key, release, data)
         os.sync()
         switch(journal, 'after')
         commit(journal)
@@ -606,14 +670,26 @@ def install(key, entry, archive, activate, promoted=False):
         print('[software-update] committed; cleanup deferred: ' + str(error), file=sys.stderr)
 
 
-def rollback(key):
+def rollback(key, to_legacy=False):
     before = load()
     if key in before['blocked'] or key not in before['components']:
         raise RuntimeError('Rollback requires an active registered component without a successor')
-    history = json.loads((STATE / 'history' / (key + '.json')).read_text())
+    if to_legacy:
+        preserve_activation_checkpoint(key, before)
+    history_path = STATE / ('activation' if to_legacy else 'history') / (key + '.json')
+    if not history_path.is_file():
+        raise RuntimeError('No saved ' + ('activation checkpoint' if to_legacy else 'rollback history') + ' for ' + key)
+    history = json.loads(history_path.read_text())
     validate(history['before'])
     validate(history['after'])
-    if history['after']['components'].get(key) != before['components'][key]:
+    if to_legacy:
+        checkpoint = history['after']['components'].get(key)
+        if (key in history['before']['components'] or not checkpoint
+                or checkpoint['service'] != key
+                or sorted(checkpoint['replaces']) != sorted(before['components'][key]['replaces'])
+                or not set(checkpoint['replaces']) <= LEGACY):
+            raise RuntimeError('Activation checkpoint is not a matching legacy migration')
+    elif history['after']['components'].get(key) != before['components'][key]:
         raise RuntimeError('Rollback history does not match the installed release')
     after = copy.deepcopy(before)
     old = history['before']['components'].get(key)
@@ -634,7 +710,7 @@ def rollback(key):
     validate(after)
     affected = sorted({key} | set(before['components'][key]['replaces']))
     running = [owner for owner in affected if service_state(owner).get('ActiveState') == 'active']
-    journal = dict(format=1, phase='pending', action='rollback', key=key, before=before, after=after, affected=affected,
+    journal = dict(format=1, phase='pending', action='rollback-to-legacy' if to_legacy else 'rollback', key=key, before=before, after=after, affected=affected,
                    before_running=running, after_running=history['before_running'])
     config = Path('/root/config/bootstrap.json')
     settings = json.loads(config.read_text())
@@ -662,8 +738,8 @@ if __name__ == '__main__':
             recover()
         elif action == 'status':
             print(status(sys.argv[2]))
-        elif action == 'rollback':
-            rollback(sys.argv[2])
+        elif action in ('rollback', 'rollback-to-legacy'):
+            rollback(sys.argv[2], to_legacy=action == 'rollback-to-legacy')
         elif action == 'install':
             key, payload, archive, flag = sys.argv[2:]
             entry = json.loads(Path(payload).read_text())[key]
@@ -1426,7 +1502,7 @@ SERVICE_STATUS=legacy
 [ ! -e /root/bootstrap/services/transition.json ] || service_transaction recover || { echo "Service OTA recovery failed" >&2; exit 1; }
 if [ -e /root/bootstrap/services/ownership.json ] || [ -L /root/bootstrap/services/ownership.json ]; then
   SERVICE_TARGET="$APP"
-  [ "$APP" != rollback ] || SERVICE_TARGET="${2:-}"
+  { [ "$APP" != rollback ] && [ "$APP" != rollback-to-legacy ]; } || SERVICE_TARGET="${2:-}"
   SERVICE_STATUS=$(service_transaction status "$SERVICE_TARGET") || exit 1
   [ "$SERVICE_STATUS" != blocked ] || { echo "Component $SERVICE_TARGET has been replaced; refusing legacy update/rollback" >&2; exit 1; }
   HAL_STATUS=$(service_transaction status hal) || exit 1
@@ -1439,6 +1515,11 @@ else
   recover_pending_update || { echo "Pending OTA recovery failed; refusing another update" >&2; exit 1; }
 fi
 [ "$APP" != recover ] || { echo "OTA recovery complete"; exit 0; }
+if [ "$APP" = rollback-to-legacy ]; then
+  [ $# -eq 2 ] && [ "$SERVICE_STATUS" = managed ] || { echo "Usage: software-update rollback-to-legacy <managed-component>" >&2; exit 1; }
+  service_transaction rollback-to-legacy "$2"
+  exit 0
+fi
 if [ "$APP" = rollback ] && [ "$SERVICE_STATUS" = managed ]; then
   [ $# -eq 2 ] || exit 1
   service_transaction rollback "$2"

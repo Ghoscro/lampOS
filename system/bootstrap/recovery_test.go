@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.autonomous.ai/os/system/bootstrap/config"
@@ -117,5 +118,40 @@ func TestLegacyHALRecoveryRequiresDirectoryBackup(t *testing.T) {
 	}
 	if _, err := os.Stat(calls); !os.IsNotExist(err) {
 		t.Fatalf("invalid backup must not trigger recovery: %v", err)
+	}
+}
+
+func TestServeRecoversBeforeWaitingForProvisioning(t *testing.T) {
+	b, calls := serviceBootstrap(t)
+	t.Setenv("UPDATE_TEST_FAIL", "recover")
+	if err := os.WriteFile(filepath.Join(b.serviceDirectory(), "transition.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// No metadata URL: waiting for provisioning first would hang indefinitely.
+	err := b.Serve()
+	if err == nil || !strings.Contains(err.Error(), "startup OTA recovery") {
+		t.Fatalf("startup error: %v", err)
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil || string(data) != "recover\n" {
+		t.Fatalf("calls %q: %v", data, err)
+	}
+}
+
+func TestServeRecoversBeforeParsingPollInterval(t *testing.T) {
+	b, calls := serviceBootstrap(t)
+	t.Setenv("UPDATE_TEST_FAIL", "")
+	b.cfg.MetadataURL = "http://127.0.0.1:1/unused"
+	b.cfg.PollInterval = "invalid"
+	if err := os.WriteFile(filepath.Join(b.serviceDirectory(), "transition.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := b.Serve()
+	if err == nil || !strings.Contains(err.Error(), "parse poll interval") {
+		t.Fatalf("startup error: %v", err)
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil || string(data) != "recover\n" {
+		t.Fatalf("calls %q: %v", data, err)
 	}
 }

@@ -72,3 +72,28 @@ ota_metadata_sign() {
 ota_artifact_sha256() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
+
+# Read one immutable GCS generation, then publish only if it is still current.
+# A competing publisher must be retried from a fresh read; never overwrite its
+# promotion or activation changes with an older snapshot.
+ota_metadata_fetch() {
+  local url="$1" destination="$2" metadata generation
+  OTA_METADATA_SOURCE=''
+  OTA_METADATA_GENERATION=''
+  metadata=$(gsutil stat "$url") || return 1
+  generation=$(printf '%s\n' "$metadata" | awk '$1 == "Generation:" {print $2}')
+  [[ "$generation" =~ ^[0-9]+$ ]] || { echo 'ERROR: missing GCS metadata generation' >&2; return 1; }
+  gsutil cp "${url}#${generation}" "$destination" || return 1
+  OTA_METADATA_SOURCE="$url"
+  OTA_METADATA_GENERATION="$generation"
+}
+
+ota_metadata_publish() {
+  local source="$1" url="$2"
+  [[ "${OTA_METADATA_SOURCE:-}" == "$url" && "${OTA_METADATA_GENERATION:-}" =~ ^[0-9]+$ ]] \
+    || { echo 'ERROR: metadata was not read successfully; refusing publication' >&2; return 1; }
+  gsutil -h "x-goog-if-generation-match:${OTA_METADATA_GENERATION}" \
+    -h 'Content-Type:application/json' -h 'Cache-Control:no-cache, no-store, must-revalidate' \
+    cp "$source" "$url" \
+    || { echo 'ERROR: metadata publication failed or a concurrent release changed the feed; retry from a fresh read' >&2; return 1; }
+}
