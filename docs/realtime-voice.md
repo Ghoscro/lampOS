@@ -3626,7 +3626,7 @@ fails, that capture is accepted. Playback starting during the hold drops the cap
 - A capture is judged once, even when live falls back to a turn. A reject clears
   the VAD lookback (the held audio was consumed) and any pending listening cue.
 
-`HAL_LANG_GATE` selects `enforce` (default), `shadow` (log, never reject) or `off`.
+`HAL_LANG_GATE` defaults to `off` (no language gate). Set `enforce` to enable rejection or `shadow` to log without rejecting.
 `HAL_LANG_ID_CPUS` (for example `0,1,2,3`; empty = no pin) runs loading and
 inference on one worker thread pinned with `sched_setaffinity`;
 `HAL_LANG_ID_THREADS` defaults to one per pinned CPU, else 2.

@@ -106,7 +106,7 @@ LANG_ID_CACHE_DIR = Path(os.environ.get(
 LANG_ID_CPUS = [int(c) for c in os.environ.get("HAL_LANG_ID_CPUS", "").split(",") if c.strip()]
 # Inference threads; defaults to one per pinned CPU, else 2.
 LANG_ID_THREADS = int(os.environ.get("HAL_LANG_ID_THREADS", "") or len(LANG_ID_CPUS) or 2)
-LANG_GATE_MODE = os.environ.get("HAL_LANG_GATE", "enforce").strip().lower()
+LANG_GATE_MODE = os.environ.get("HAL_LANG_GATE", "off").strip().lower()
 LANG_GATE_MIN_PROB = float(os.environ.get("HAL_LANG_GATE_MIN_PROB", "0.5"))
 # Speech collected before judging; also the classification window.
 LANG_GATE_SPEECH_S = float(os.environ.get("HAL_LANG_GATE_SPEECH_S", "2.0"))

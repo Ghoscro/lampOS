@@ -3548,8 +3548,8 @@ Nếu một lần inference lỗi, capture đó được chấp nhận. Playback
   reject xóa VAD lookback (audio đã giữ đã được tiêu thụ) và mọi listening cue đang
   chờ.
 
-`HAL_LANG_GATE` chọn `enforce` (mặc định), `shadow` (ghi log, không bao giờ reject)
-hoặc `off`. `HAL_LANG_ID_CPUS` (ví dụ `0,1,2,3`; rỗng = không pin) chạy load và
+`HAL_LANG_GATE` mặc định là `off` (tắt language gate). Đặt `enforce` để bật chặn
+hoặc `shadow` để chỉ ghi log, không reject. `HAL_LANG_ID_CPUS` (ví dụ `0,1,2,3`; rỗng = không pin) chạy load và
 inference trên một worker thread được pin bằng `sched_setaffinity`;
 `HAL_LANG_ID_THREADS` mặc định một thread cho mỗi CPU được pin, nếu không là 2.
 `HAL_LANG_GATE_DUMP_DIR` ghi phần lời nói được chấm điểm và capture đã giữ thành
