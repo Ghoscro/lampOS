@@ -298,6 +298,8 @@ Per-edge debounce is 200 ms (press and release ticks tracked independently so a 
 
 ## MPR121 detection (`hal/drivers/mpr121.py`)
 
+Lamp body touch is disabled by default at the hardware team's request: `boards.orangepi_sun60.enabled` is `false` in `robots/lamp/mpr121.json`. HAL skips MPR121 initialization and polling, disabling all body-touch gestures. The retained wiring and tuning below apply only if explicitly re-enabled. Restart HAL after deploying a configuration change.
+
 MPR121 wiring follows the device-owned GPIO configuration flow: HAL reads
 `mpr121.json` in the directory selected by `DEVICES_DIR` and `DEVICE_TYPE`
 (currently `robots/lamp/`), then selects the detected board from its `boards`
@@ -316,7 +318,7 @@ does not modify boot overlays automatically:
 {
   "boards": {
     "orangepi_sun60": {
-      "enabled": true,
+      "enabled": false,
       "bus": 0,
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
