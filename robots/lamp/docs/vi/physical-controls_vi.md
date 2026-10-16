@@ -292,6 +292,8 @@ Debounce mỗi edge là 200 ms (tick nhấn và nhả track độc lập để t
 
 ## Detect MPR121 (`hal/drivers/mpr121.py`)
 
+Body touch của Lamp mặc định đã tắt theo yêu cầu team hardware: `boards.orangepi_sun60.enabled` là `false` trong `robots/lamp/mpr121.json`. HAL bỏ qua khởi tạo và polling MPR121, nên toàn bộ gesture chạm thân đều tắt. Wiring và thông số bên dưới được giữ để dùng khi chủ động bật lại. Cần restart HAL sau khi triển khai thay đổi cấu hình.
+
 Wiring MPR121 theo flow cấu hình GPIO do từng device quản lý: HAL đọc
 `mpr121.json` trong thư mục được chọn qua `DEVICES_DIR` và `DEVICE_TYPE`
 (hiện là `robots/lamp/`), rồi chọn board đã detect từ map `boards`. Hiện chỉ
@@ -308,7 +310,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
 {
   "boards": {
     "orangepi_sun60": {
-      "enabled": true,
+      "enabled": false,
       "bus": 0,
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
