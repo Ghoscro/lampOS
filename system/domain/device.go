@@ -1336,14 +1336,19 @@ type ConfigPublicResponse struct {
 	// WakeLight is the saved wake light; WakeLightEnabled is its effective toggle.
 	WakeLight        *config.WakeLight `json:"wake_light,omitempty"`
 	WakeLightEnabled bool              `json:"wake_light_enabled"`
-	DeviceID         string            `json:"device_id"`
-	Mac              string            `json:"mac"`
-	NetworkSSID      string            `json:"network_ssid"`
-	MQTTEndpoint     string            `json:"mqtt_endpoint"`
-	MQTTUsername     string            `json:"mqtt_username"`
-	MQTTPort         int               `json:"mqtt_port"`
-	FAChannel        string            `json:"fa_channel"`
-	FDChannel        string            `json:"fd_channel"`
+	// TapChime and TapLightEnabled are the effective tap-to-talk cue toggles (default
+	// true); TapLight is the saved tap-to-talk light look.
+	TapChime        bool              `json:"tap_chime"`
+	TapLight        *config.WakeLight `json:"tap_light,omitempty"`
+	TapLightEnabled bool              `json:"tap_light_enabled"`
+	DeviceID        string            `json:"device_id"`
+	Mac             string            `json:"mac"`
+	NetworkSSID     string            `json:"network_ssid"`
+	MQTTEndpoint    string            `json:"mqtt_endpoint"`
+	MQTTUsername    string            `json:"mqtt_username"`
+	MQTTPort        int               `json:"mqtt_port"`
+	FAChannel       string            `json:"fa_channel"`
+	FDChannel       string            `json:"fd_channel"`
 
 	// CloudPerception is never omitted so the web can render every toggle.
 	CloudPerception config.CloudPerception `json:"cloud_perception"`
@@ -1436,6 +1441,10 @@ type UpdateConfigRequest struct {
 	// WakeLight replaces the wake light look and toggle; nil keeps it.
 	WakeLight      *config.WakeLight `json:"wake_light,omitempty"`
 	VoiceInputMode *string           `json:"voice_input_mode,omitempty" binding:"omitempty,oneof=automatic tap_to_talk"`
+	// TapChime toggles the tap-to-talk ready chime; nil keeps it.
+	TapChime *bool `json:"tap_chime,omitempty"`
+	// TapLight replaces the tap-to-talk light look and toggle; nil keeps it.
+	TapLight *config.WakeLight `json:"tap_light,omitempty"`
 
 	// CloudPerception changes camera cloud opt-ins; omitted keys and an omitted object keep their value.
 	CloudPerception *CloudPerceptionSetData `json:"cloud_perception,omitempty"`

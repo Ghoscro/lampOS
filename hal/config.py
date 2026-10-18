@@ -193,6 +193,11 @@ def wake_chime_enabled() -> bool:
     return _os_cfg_get("wake_chime", True) is not False
 
 
+def tap_chime_enabled() -> bool:
+    """Owner toggle (config.json `tap_chime`, default on) for the tap-to-talk ready chime."""
+    return _os_cfg_get("tap_chime", True) is not False
+
+
 def custom_wake_phrases() -> list[str]:
     """Owner-edited wake phrases (config.json `wake_phrases`); [] means the built-in list.
 

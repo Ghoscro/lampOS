@@ -1387,7 +1387,7 @@ mic cũng bật đèn báo tắt mic, và lựa chọn được giữ qua các l
 
 #### `realtime.get` / `realtime.set` — Cài đặt realtime voice qua MQTT
 
-Bản điện thoại của trang **Settings → Realtime** trên web (trên web chỉ hiện ở chế độ debug).
+Bản điện thoại của trang **Settings → Realtime** trên web.
 
 ```json
 {"cmd": "data", "kind": "realtime.get"}

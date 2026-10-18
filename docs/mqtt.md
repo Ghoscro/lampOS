@@ -1424,7 +1424,7 @@ survives HAL restarts.
 
 #### `realtime.get` / `realtime.set` — Realtime voice settings over MQTT
 
-The phone twin of the web **Settings → Realtime** page (debug-only on the web).
+The phone twin of the web **Settings → Realtime** page.
 
 ```json
 {"cmd": "data", "kind": "realtime.get"}
