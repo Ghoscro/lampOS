@@ -153,6 +153,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [realtimeApiKey, setRealtimeApiKey] = useState("");
   const [realtimeBaseUrl, setRealtimeBaseUrl] = useState("");
   const [realtimeWebSearch, setRealtimeWebSearch] = useState(true);
+  const [realtimeFastVoice, setRealtimeFastVoice] = useState(false);
+  const [realtimeFastVoicePauseS, setRealtimeFastVoicePauseS] = useState(2);
+  const [realtimeFastVoiceSilentS, setRealtimeFastVoiceSilentS] = useState(5);
   const [channel, setChannel] = useState<ChannelType>("telegram");
   const [teleToken, setTeleToken] = useState("");
   const [teleUserId, setTeleUserId] = useState("");
@@ -220,6 +223,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeReasoning: string;
     realtimeBaseUrl: string;
     realtimeWebSearch: boolean;
+    realtimeFastVoice: boolean;
+    realtimeFastVoicePauseS: number;
+    realtimeFastVoiceSilentS: number;
   };
   const [baseline, setBaseline] = useState<InitialSnapshot | null>(null);
 
@@ -287,6 +293,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           if (cfg.realtime.reasoning) setRealtimeReasoning(cfg.realtime.reasoning);
           setRealtimeBaseUrl(cfg.realtime.base_url ?? "");
           setRealtimeWebSearch(cfg.realtime.web_search ?? true);
+          setRealtimeFastVoice(cfg.realtime.fast_voice ?? false);
+          setRealtimeFastVoicePauseS(cfg.realtime.fast_voice_pause_s ?? 2);
+          setRealtimeFastVoiceSilentS(cfg.realtime.fast_voice_silent_timeout_s ?? 5);
           setRealtimeLoaded({ apiKey: !!cfg.realtime.has_api_key });
         }
         setChannel((cfg.channel as ChannelType) || "telegram");
@@ -392,6 +401,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           realtimeReasoning: cfg.realtime?.reasoning || "MINIMAL",
           realtimeBaseUrl: cfg.realtime?.base_url ?? "",
           realtimeWebSearch: cfg.realtime?.web_search ?? true,
+          realtimeFastVoice: cfg.realtime?.fast_voice ?? false,
+          realtimeFastVoicePauseS: cfg.realtime?.fast_voice_pause_s ?? 2,
+          realtimeFastVoiceSilentS: cfg.realtime?.fast_voice_silent_timeout_s ?? 5,
         });
       })
       .catch((err: Error) => setError(err.message))
@@ -482,6 +494,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeReasoning !== baseline.realtimeReasoning ||
     realtimeBaseUrl !== baseline.realtimeBaseUrl ||
     realtimeWebSearch !== baseline.realtimeWebSearch ||
+    realtimeFastVoice !== baseline.realtimeFastVoice ||
+    realtimeFastVoicePauseS !== baseline.realtimeFastVoicePauseS ||
+    realtimeFastVoiceSilentS !== baseline.realtimeFastVoiceSilentS ||
     !!password || !!adminPassword || !!llmApiKey || !!ttsApiKey ||
     !!sttApiKey || !!deepgramApiKey || !!mqttPassword ||
     !!teleToken || !!slackBotToken || !!slackAppToken || !!discordBotToken ||
@@ -538,6 +553,10 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       if (realtimeProvider === "pipecat_v1") realtime.web_search = realtimeWebSearch;
       if (realtimeBaseUrl) realtime.base_url = realtimeBaseUrl;
       if (realtimeApiKey) realtime.api_key = realtimeApiKey;
+      // Only a real change: any new value in the block restarts HAL.
+      if (realtimeFastVoice !== baseline?.realtimeFastVoice) realtime.fast_voice = realtimeFastVoice;
+      if (realtimeFastVoicePauseS !== baseline?.realtimeFastVoicePauseS) realtime.fast_voice_pause_s = realtimeFastVoicePauseS;
+      if (realtimeFastVoiceSilentS !== baseline?.realtimeFastVoiceSilentS) realtime.fast_voice_silent_timeout_s = realtimeFastVoiceSilentS;
       body.realtime = realtime;
       body.wakeword = wakeWord;
       if (wakeChime !== baseline?.wakeChime) body.wake_chime = wakeChime;
@@ -620,7 +639,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         mqttEndpoint, mqttPort, mqttUsername,
         faChannel, fdChannel,
         realtimeEnabled, realtimeProvider, realtimeVoice,
-        realtimeReasoning, realtimeBaseUrl, realtimeWebSearch,
+        realtimeReasoning, realtimeBaseUrl, realtimeWebSearch, realtimeFastVoice, realtimeFastVoicePauseS, realtimeFastVoiceSilentS,
       });
       setPassword(""); setAdminPassword("");
       setLlmApiKey(""); setTtsApiKey(""); setSttApiKey("");
@@ -653,7 +672,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     ttsApiKey, ttsBaseUrl, ttsLoaded, ttsProvider, ttsVoice, ttsSpeed, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
     realtimeEnabled, wakeWord, wakePhrases, wakePhrasesDefault, wakeChime, wakeFollowupS, wakeLightOn, wakeLook, voiceInputMode, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
-    realtimeWebSearch,
+    realtimeWebSearch, realtimeFastVoice, realtimeFastVoicePauseS, realtimeFastVoiceSilentS,
   ]);
 
   const showSave = activeSection !== "mcp" && activeSection !== "plugins" && activeSection !== "face" && activeSection !== "privacy" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "led" && activeSection !== "scheduled" && activeSection !== "facebook" && activeSection !== "shopify" && activeSection !== "ebay";
@@ -831,6 +850,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               apiKey={realtimeApiKey} setApiKey={setRealtimeApiKey}
               baseUrl={realtimeBaseUrl} setBaseUrl={setRealtimeBaseUrl}
               webSearch={realtimeWebSearch} setWebSearch={setRealtimeWebSearch}
+              fastVoice={realtimeFastVoice} setFastVoice={setRealtimeFastVoice}
+              fastVoicePauseS={realtimeFastVoicePauseS} setFastVoicePauseS={setRealtimeFastVoicePauseS}
+              fastVoiceSilentS={realtimeFastVoiceSilentS} setFastVoiceSilentS={setRealtimeFastVoiceSilentS}
             />
             {activeSection === "realtime" && hasDefaults && (
               <RestoreDefaultsButton section="realtime" />

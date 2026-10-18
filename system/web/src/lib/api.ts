@@ -344,6 +344,12 @@ export interface DeviceConfig {
     base_url?: string;
     has_api_key?: boolean;
     web_search?: boolean;
+    // Effective fast voice setting (Gemini only, more Gemini usage); default on for Intern v2 only.
+    fast_voice?: boolean;
+    // Fast voice: longest wait (s) after a pause the turn model calls unfinished.
+    fast_voice_pause_s?: number;
+    // Fast voice: seconds to wait on a silent model before the main agent takes over.
+    fast_voice_silent_timeout_s?: number;
   };
   device_id: string;
   mac: string;

@@ -203,3 +203,17 @@ LIVE_UPLINK_DUMP_DIR = os.environ.get("HAL_LIVE_UPLINK_DUMP_DIR", "")
 # Absolute ceiling on one session, whatever is happening. Backstop against a
 # session that never goes idle because the room is noisy.
 LIVE_MAX_S = float(os.environ.get("HAL_LIVE_MAX_S", "600"))
+
+# Fast voice (hal.config.FAST_VOICE; default on for Intern v2 only): shorter waits
+# between the person stopping and the question reaching Gemini. Each wait stays tunable.
+FAST_VOICE = _hal_config.FAST_VOICE
+if FAST_VOICE:
+    # Smart Turn still runs at this point and holds an unfinished sentence.
+    SILENCE_TIMEOUT_S = float(os.environ.get("HAL_FAST_VOICE_SILENCE_S", "0.65"))
+    # Commit without waiting on identity; a late speaker is corrected downstream.
+    SPEAKER_PREPASS_COMMIT_JOIN_S = float(os.environ.get("HAL_FAST_VOICE_PREPASS_JOIN_S", "0"))
+    # The language gate's own end-of-utterance wait never outlasts the silence clock.
+    LANG_GATE_UTTERANCE_GAP_S = min(LANG_GATE_UTTERANCE_GAP_S, SILENCE_TIMEOUT_S)
+    # Smart Turn calls most Vietnamese questions unfinished; cap that wait (owner setting).
+    TURN_END_MAX_PAUSE_S = _hal_config.REALTIME_FAST_VOICE_PAUSE_S
+    TURN_END_FALLBACK_S = min(TURN_END_FALLBACK_S, TURN_END_MAX_PAUSE_S)

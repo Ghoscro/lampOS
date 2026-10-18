@@ -777,6 +777,14 @@ a stale session, and the turn reconnects with its pre-roll replayed. The recv
 loop now logs server `Error` messages and unexpected closes, which used to be
 dropped silently.
 
+A capture that opens no turn (a language-gate or live-guard skip, or a live
+session) used to drop the pre-connected session without closing it, then open a
+new one. Each abandoned socket idled until the server killed it — on Flux
+`INACTIVE_CLIENT … did not receive a websocket Ping message in the last 60 seconds`,
+exactly 60 s after its open, once per rejected capture (48 on one Intern v2 boot,
+2026-10-16). `_vad_loop` now closes it off the mic thread
+(`_retire_keepalive_session`); only a turn hands the session on.
+
 The button tap's chime never waits behind other audio: `TTSService.try_play_ack_chime()`
 takes the output stream only if it is free and otherwise skips, so the sound
 never trails the LED.
@@ -3659,6 +3667,59 @@ open session. In 10 clips of 5 s English followed directly by 5 s Vietnamese (an
 stayed open through the Vietnamese, and Nova-3 `en` transcribed none of the
 Vietnamese: each transcript held only the English, including the trailing English.
 The Vietnamese did keep the turn open until about 1 s after it stopped.
+
+### Fast voice (more Gemini use)
+
+Every device has the flag; it is **on by default for Intern v2 only**
+(`device_type` / `DEVICE_TYPE` `intern-v2`) and off elsewhere. When off nothing
+below changes. The **Faster replies** checkbox on Settings → Realtime (Gemini)
+writes `config.json` `realtime.fast_voice` (also accepted by `realtime.set` as
+`fast_voice`; the Go field is `RealtimeConfig.FastVoice`, absent = the device
+default; `RealtimeFastVoice()` reports the effective value to the web);
+`HAL_FAST_VOICE=1|0` wins over both. It applies only to Gemini in turn mode (`REALTIME_ENABLED`,
+provider `gemini`, `LIVE_MODE` off; live mode already streams); anywhere else
+`hal.config.FAST_VOICE` stays false. It shortens the device's own waits
+between the person stopping and the question reaching Gemini:
+
+| Wait | Off | On | Tune with |
+|---|---|---|---|
+| Silence clock before Smart Turn (`SILENCE_TIMEOUT_S`) | `HAL_SILENCE_TIMEOUT` (profile 1.2 s, code 2.5 s) | 0.65 s; Smart Turn still holds an unfinished sentence | `HAL_FAST_VOICE_SILENCE_S` |
+| Deepgram `endpointing` (`stt/autonomous.py`, `stt/deepgram.py`) | 1500 ms | 400 ms, so the wake word is confirmed by a final mid-sentence and the final drain ends sooner | `HAL_FAST_VOICE_STT_ENDPOINTING_MS` |
+| Closed wake window upload (`start_realtime_turn`) | Buffered until the capture ends, then flushed | Streamed from the frame where an STT partial opens the wake gate; only a confirmed wake (final, assembled transcript or follow-up focus) commits, else the streamed activity is discarded (`discard_open_activity("wake-unconfirmed")`) | — |
+| Final-drain overlap (`early_authorized`) | Follow-up focus or wake disabled only | Also a final-confirmed wake word | — |
+| Smart Turn "unfinished" wait (`TURN_END_MAX_PAUSE_S`, fallback capped to it) | 6.0 s | `realtime.fast_voice_pause_s` (default 2.0 s, 0.8–6.0; web **Wait after you pause**); Smart Turn calls most Vietnamese questions unfinished (p≈0.08), which held them 5.5 s on device | `HAL_FAST_VOICE_MAX_PAUSE_S` |
+| Silent-model hand-off (`REALTIME_RECV_QUEUE_TIMEOUT_S`; a server still sending messages keeps the turn) | 8.0 s | `realtime.fast_voice_silent_timeout_s` (default 5 s, 3–8; web **Hand off when Gemini stays silent**); a freshly reconnected session once stayed silent 9.5 s before the main agent took over | `HAL_FAST_VOICE_SILENT_TIMEOUT_S` |
+| Speaker-ID prepass join at commit | 0.2 s | 0 s (identity is corrected downstream) | `HAL_FAST_VOICE_PREPASS_JOIN_S` |
+| Language gate hold | Gap `HAL_LANG_GATE_UTTERANCE_GAP_S` (1.0 s), then the silence clock restarts from zero | Gap capped at the silence clock; the clock still restarts from zero (counting the held quiet tail cut quiet speakers off at session start) | — |
+| Rebuild readiness after an idle park | Checked once | Waits up to 0.5 s for the prepare thread that joined the rebuild | — |
+| Reply voice | Our TTS (e.g. ElevenLabs) after the reply text | Gemini's own audio (`REALTIME_NATIVE_AUDIO` forced on, voice from `realtime.gemini.voice`) | — |
+
+The Gemini model is **not** changed: plain `gemini-3.8-live` delegated or
+stayed silent every turn on device (2026-09-18), so fast voice keeps the
+configured model. More Gemini use comes from more turns reaching Gemini sooner,
+including audio streamed before a capture is later dropped as noise (the
+existing discard path handles it). Unit coverage: `hal/test/test_fast_voice.py`.
+On device 172.168.20.203 (2026-10-15/16) answers started in about 2.5–4.7 s
+instead of 5–10 s; a wake confirmed early by a partial reached 1.4–2.6 s. The
+rest is Gemini's own response time.
+
+The fast voice speaks in `realtime.gemini.voice`: os-server accepts all 30
+Gemini Live prebuilt voices (`RealtimeGeminiVoiceList`, same set as HAL
+`GeminiVoice`); Vietnamese replies were judged natural on device with Achernar.
+
+Native playback runs inside the turn, while nobody reads the microphone. With
+the arecord backend the pipe queues that audio (about 2 s), and the voice loop
+used to read it back as fresh speech: the opening words of the device's own
+reply ("Bây giờ…", "Để tôi…") opened a follow-up turn. With
+`REALTIME_NATIVE_AUDIO` on, `_vad_loop` now drops the queued audio after each
+turn (`_discard_stale_mic_backlog`: queued frames return at once, so it stops at
+the first read that waits; at most 4 s; the continuous capture pump already drops
+playback audio). ElevenLabs replies are unaffected: they mostly play after the
+turn, while the loop drains the mic.
+
+Gemini sometimes writes its silence marker as `[no speech]` instead of
+`<no speech>`; every marker matcher accepts both, so native audio for a
+marker-only reply is held back instead of played.
 
 ### `config.json` `realtime` block
 
