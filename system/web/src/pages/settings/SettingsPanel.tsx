@@ -147,6 +147,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [wakeFollowupS, setWakeFollowupS] = useState(WAKE_FOLLOWUP_DEFAULT_S);
   const [wakeLightOn, setWakeLightOn] = useState(true);
   const [wakeLook, setWakeLook] = useState<WakeLook>(WAKE_LOOK_DEFAULT);
+  const [tapChime, setTapChime] = useState(true);
+  const [tapLightOn, setTapLightOn] = useState(true);
+  const [tapLook, setTapLook] = useState<WakeLook>(WAKE_LOOK_DEFAULT);
   const [realtimeProvider, setRealtimeProvider] = useState("gemini");
   const [realtimeVoice, setRealtimeVoice] = useState("Kore");
   const [realtimeReasoning, setRealtimeReasoning] = useState("MINIMAL");
@@ -209,6 +212,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     wakeFollowupS: number;
     wakeLightOn: boolean;
     wakeLook: WakeLook;
+    tapChime: boolean;
+    tapLightOn: boolean;
+    tapLook: WakeLook;
     voiceInputMode: VoiceInputMode;
     channel: ChannelType;
     teleUserId: string; slackUserId: string;
@@ -286,6 +292,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         }
         setWakeLightOn(cfg.wake_light_enabled ?? true);
         setWakeLook(wakeLookFrom(cfg.wake_light));
+        setTapChime(cfg.tap_chime ?? true);
+        setTapLightOn(cfg.tap_light_enabled ?? true);
+        setTapLook(wakeLookFrom(cfg.tap_light));
         if (cfg.realtime) {
           setRealtimeEnabled(cfg.realtime.enabled ?? true);
           setRealtimeProvider(cfg.realtime.provider || "gemini");
@@ -381,6 +390,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           wakeFollowupS: cfg.wake_followup_s ?? WAKE_FOLLOWUP_DEFAULT_S,
           wakeLightOn: cfg.wake_light_enabled ?? true,
           wakeLook: wakeLookFrom(cfg.wake_light),
+          tapChime: cfg.tap_chime ?? true,
+          tapLightOn: cfg.tap_light_enabled ?? true,
+          tapLook: wakeLookFrom(cfg.tap_light),
           voiceInputMode: cfg.voice_input_mode ?? "automatic",
           channel: (cfg.channel as ChannelType) || "telegram",
           teleUserId: cfg.telegram_user_id ?? "",
@@ -477,6 +489,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     wakeFollowupS !== baseline.wakeFollowupS ||
     wakeLightOn !== baseline.wakeLightOn ||
     !sameWakeLook(wakeLook, baseline.wakeLook) ||
+    tapChime !== baseline.tapChime ||
+    tapLightOn !== baseline.tapLightOn ||
+    !sameWakeLook(tapLook, baseline.tapLook) ||
     voiceInputMode !== baseline.voiceInputMode ||
     channel !== baseline.channel ||
     teleUserId !== baseline.teleUserId ||
@@ -565,6 +580,11 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         const light: WakeLightConfig = { enabled: wakeLightOn, ...wakeLook };
         body.wake_light = light;
       }
+      if (tapChime !== baseline?.tapChime) body.tap_chime = tapChime;
+      if (tapLightOn !== baseline?.tapLightOn || !baseline || !sameWakeLook(tapLook, baseline.tapLook)) {
+        const light: WakeLightConfig = { enabled: tapLightOn, ...tapLook };
+        body.tap_light = light;
+      }
       // [] restores the built-in list (which then follows agent renames).
       if (!samePhrases(wakePhrases, baseline?.wakePhrases ?? [])) {
         body.wake_phrases = samePhrases(wakePhrases, wakePhrasesDefault) ? [] : wakePhrases;
@@ -630,7 +650,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         ...savedLlm, llmConfigMode,
         sttBaseUrl, sttProvider, sttLanguage,
         ttsBaseUrl, ttsProvider, ttsVoice, ttsSpeed,
-        wakeWord, wakePhrases, wakeChime, wakeFollowupS, wakeLightOn, wakeLook, voiceInputMode,
+        wakeWord, wakePhrases, wakeChime, wakeFollowupS, wakeLightOn, wakeLook,
+        tapChime, tapLightOn, tapLook, voiceInputMode,
         channel,
         teleUserId, slackUserId,
         discordGuildId, discordUserId,
@@ -671,7 +692,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     sttProvider, sttLanguage, sttLoaded,
     ttsApiKey, ttsBaseUrl, ttsLoaded, ttsProvider, ttsVoice, ttsSpeed, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
-    realtimeEnabled, wakeWord, wakePhrases, wakePhrasesDefault, wakeChime, wakeFollowupS, wakeLightOn, wakeLook, voiceInputMode, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
+    realtimeEnabled, wakeWord, wakePhrases, wakePhrasesDefault, wakeChime, wakeFollowupS, wakeLightOn, wakeLook, tapChime, tapLightOn, tapLook, voiceInputMode, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
     realtimeWebSearch, realtimeFastVoice, realtimeFastVoicePauseS, realtimeFastVoiceSilentS,
   ]);
 
@@ -749,6 +770,12 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               setWakeLightOn={setWakeLightOn}
               wakeLook={wakeLook}
               setWakeLook={setWakeLook}
+              tapChime={tapChime}
+              setTapChime={setTapChime}
+              tapLightOn={tapLightOn}
+              setTapLightOn={setTapLightOn}
+              tapLook={tapLook}
+              setTapLook={setTapLook}
             />
 
             <WifiSection

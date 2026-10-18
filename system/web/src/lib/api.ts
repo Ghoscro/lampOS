@@ -335,6 +335,10 @@ export interface DeviceConfig {
   // Listening light on a wake; absent fields keep the board look.
   wake_light?: WakeLightConfig | null;
   wake_light_enabled?: boolean;
+  // Tap-to-talk cues, separate from the wake cues (both default true).
+  tap_chime?: boolean;
+  tap_light?: WakeLightConfig | null;
+  tap_light_enabled?: boolean;
   realtime?: {
     enabled?: boolean;
     provider?: string;

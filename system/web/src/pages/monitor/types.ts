@@ -237,12 +237,12 @@ export const NAV: NavEntry[] = [
     icon: "⚙",
     children: [
       { id: "settings:device",   label: "General",   icon: "⚙" },
+      { id: "settings:realtime", label: "Realtime",  icon: "⚡" },
       { id: "settings:wifi",     label: "Wi-Fi",     icon: "⌁" },
       { id: "settings:llm",      label: "AI Brain",  icon: "✦" },
       { id: "settings:runtime",  label: "Runtime",   icon: "▦" },
       { id: "settings:stt",      label: "Language",  icon: "⌘" },
       { id: "settings:tts",      label: "Voice",     icon: "♫" },
-      { id: "settings:realtime", label: "Realtime",  icon: "⚡" },
       { id: "settings:voice",    label: "My Voice",  icon: "◉" },
       { id: "settings:face",     label: "Face",      icon: "☺", cap: Cap.Vision },
       { id: "settings:privacy",  label: "Privacy",   icon: "◐", cap: Cap.Vision },
