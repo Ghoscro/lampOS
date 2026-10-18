@@ -208,7 +208,8 @@ export const Cap = {
   Light: "light",
 } as const;
 
-export type NavLeaf = { id: Section; label: string; icon: string; cap?: string | readonly string[] };
+// spark: a small sparkle after the label that invites a look at a feature-rich section.
+export type NavLeaf = { id: Section; label: string; icon: string; cap?: string | readonly string[]; spark?: boolean };
 export type NavLink = { href: string; label: string; icon: string; external?: boolean };
 // A subgroup nests one level of leaves inside a top-level group — used to gather
 // integration-style items (e.g. Connectors: Facebook, Discord, Slack) under a
@@ -236,8 +237,8 @@ export const NAV: NavEntry[] = [
     label: "Settings",
     icon: "⚙",
     children: [
-      { id: "settings:device",   label: "General",   icon: "⚙" },
-      { id: "settings:realtime", label: "Realtime",  icon: "⚡" },
+      { id: "settings:device",   label: "General",   icon: "⚙", spark: true },
+      { id: "settings:realtime", label: "Realtime",  icon: "⚡", spark: true },
       { id: "settings:wifi",     label: "Wi-Fi",     icon: "⌁" },
       { id: "settings:llm",      label: "AI Brain",  icon: "✦" },
       { id: "settings:runtime",  label: "Runtime",   icon: "▦" },

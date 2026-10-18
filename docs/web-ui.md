@@ -311,7 +311,7 @@ one key.
 
 Settings is **not a separate page**. It is an area of the same Monitor shell (`system/web/src/pages/monitor/index.tsx`), reached at the `/setting` route. In `App.tsx`, `/monitor` and `/setting` are child routes of a single layout route whose element renders `<Monitor/>`; React Router keeps that element mounted while only the matched child path changes, so the sidebar does **not** remount when switching between Monitor and Settings (no full-page flash). The shell derives its area — `"monitor"` or `"setting"` — from `useLocation().pathname`.
 
-The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/src/pages/monitor/types.ts`); Realtime is listed second, right after General. Clicking a Settings leaf navigates to `/setting` and renders `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) in the main area; clicking a Monitor leaf navigates to `/monitor`.
+The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/src/pages/monitor/types.ts`); Realtime is listed second, right after General. A leaf with `spark: true` (General and Realtime) shows a small twinkling amber sparkle after its label (`.lm-snav-spark`, still under `prefers-reduced-motion`) to invite a look at feature-rich sections. Clicking a Settings leaf navigates to `/setting` and renders `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) in the main area; clicking a Monitor leaf navigates to `/monitor`.
 
 **URL hash scheme** — the in-memory section keeps internal `settings:*` ids, but the URL hash uses short labels in the setting area (helpers `sectionToHash`/`hashToSection` in `types.ts`):
 

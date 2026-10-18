@@ -25,7 +25,7 @@ import {
   Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
   Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
   Server, Zap, LogOut, Clock, Search, X, CornerDownLeft, Plug, Blocks,
-  CalendarClock, Handshake, Facebook, ShoppingBag, Store, Cable, Lightbulb, ShieldCheck,
+  CalendarClock, Handshake, Facebook, ShoppingBag, Store, Cable, Lightbulb, ShieldCheck, Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -380,6 +380,11 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref, open
               >
                 <NavIcon id={child.id} size={15} />
                 {child.label}
+                {child.spark && (
+                  <span className="lm-snav-spark" title="New features inside" aria-label="New features inside">
+                    <Sparkles size={12} strokeWidth={2.2} aria-hidden="true" />
+                  </span>
+                )}
               </a>
             );
           })}
