@@ -103,9 +103,12 @@ func (s *Service) RealtimePublic() domain.RealtimePublic {
 		Voice:     s.config.RealtimeVoice(),
 		Reasoning: s.config.RealtimeReasoning(),
 		// Only the explicit override: re-persisting a derived URL breaks /ws/gemini.
-		BaseURL:   s.config.RealtimeBaseURLOverride(),
-		HasAPIKey: s.config.RealtimeHasAPIKey(),
-		WebSearch: s.config.RealtimeWebSearch(),
+		BaseURL:                 s.config.RealtimeBaseURLOverride(),
+		HasAPIKey:               s.config.RealtimeHasAPIKey(),
+		WebSearch:               s.config.RealtimeWebSearch(),
+		FastVoice:               s.config.RealtimeFastVoice(),
+		FastVoicePauseS:         s.config.RealtimeFastVoicePauseS(),
+		FastVoiceSilentTimeoutS: s.config.RealtimeFastVoiceSilentTimeoutS(),
 	}
 }
 

@@ -964,6 +964,12 @@ type RealtimeSetData struct {
 	BaseURL   string `json:"base_url,omitempty"`  // optional override; empty → llm_base_url-derived
 	// WebSearch toggles the in-session web_search tool (pipecat_v1 only); nil = unchanged.
 	WebSearch *bool `json:"web_search,omitempty"`
+	// FastVoice toggles HAL's fast voice mode (more Gemini use); nil = unchanged.
+	FastVoice *bool `json:"fast_voice,omitempty"`
+	// FastVoicePauseS sets fast voice's longest pause wait in seconds; nil = unchanged.
+	FastVoicePauseS *float64 `json:"fast_voice_pause_s,omitempty"`
+	// FastVoiceSilentTimeoutS sets how long fast voice waits on a silent model; nil = unchanged.
+	FastVoiceSilentTimeoutS *float64 `json:"fast_voice_silent_timeout_s,omitempty"`
 }
 
 // MQTTRealtimeSetCommand wraps the full realtime.set downlink envelope for unmarshalling.
@@ -1279,6 +1285,13 @@ type RealtimePublic struct {
 	HasAPIKey bool   `json:"has_api_key"`
 	// WebSearch is set only for pipecat_v1.
 	WebSearch *bool `json:"web_search,omitempty"`
+	// FastVoice is the effective fast voice setting (default on for Intern v2
+	// only; HAL applies it to Gemini only).
+	FastVoice bool `json:"fast_voice"`
+	// FastVoicePauseS is the effective fast voice pause wait (seconds).
+	FastVoicePauseS float64 `json:"fast_voice_pause_s"`
+	// FastVoiceSilentTimeoutS is the effective silent-model timeout (seconds).
+	FastVoiceSilentTimeoutS float64 `json:"fast_voice_silent_timeout_s"`
 }
 
 // ConfigPublicResponse is returned by GET /api/device/config; secrets appear only as Has* presence flags.

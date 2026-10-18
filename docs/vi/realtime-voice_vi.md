@@ -755,6 +755,14 @@ vẫn được nhận ra là stale, và lượt đó kết nối lại kèm phá
 giờ ghi log tin `Error` của server và các lần đóng bất thường, trước đây bị bỏ qua
 im lặng.
 
+Một capture không mở lượt nào (bị language gate hoặc live guard bỏ qua, hoặc đi vào
+live session) trước đây vứt session dựng sẵn mà không đóng, rồi mở session mới.
+Mỗi socket bị bỏ rơi nằm chờ tới khi server ngắt — với Flux là
+`INACTIVE_CLIENT … did not receive a websocket Ping message in the last 60 seconds`,
+đúng 60 s sau lúc mở, mỗi capture bị loại một lần (48 lần trong một lần boot
+Intern v2, 2026-10-16). Giờ `_vad_loop` đóng nó ngoài luồng mic
+(`_retire_keepalive_session`); chỉ lượt thật mới nhận session đó.
+
 Tiếng chime khi bấm nút không bao giờ chờ sau âm thanh khác: `TTSService.try_play_ack_chime()`
 chỉ ghi khi output stream đang rảnh, bận thì bỏ qua, nên tiếng không bao giờ trễ
 hơn LED.
@@ -3581,6 +3589,57 @@ khác có thêm 5 s tiếng Anh sau đó), cổng chấp nhận phần tiếng A
 suốt phần tiếng Việt, và Nova-3 `en` không phiên âm phần tiếng Việt nào: mỗi
 transcript chỉ chứa tiếng Anh, kể cả phần tiếng Anh ở cuối. Phần tiếng Việt vẫn giữ
 lượt mở cho tới khoảng 1 s sau khi dừng.
+
+### Fast voice (tốn Gemini hơn)
+
+Mọi device đều có cờ này; **chỉ Intern v2 mặc định bật** (`device_type` /
+`DEVICE_TYPE` `intern-v2`), device khác mặc định tắt. Khi tắt thì không có gì
+dưới đây thay đổi. Ô **Faster replies** ở Settings → Realtime (Gemini) ghi
+`config.json` `realtime.fast_voice` (lệnh `realtime.set` cũng nhận
+`fast_voice`; field Go là `RealtimeConfig.FastVoice`, vắng = mặc định của device;
+`RealtimeFastVoice()` trả giá trị đang áp dụng cho web); `HAL_FAST_VOICE=1|0`
+thắng cả hai. Chỉ áp dụng cho Gemini ở turn mode (`REALTIME_ENABLED`, provider
+`gemini`, `LIVE_MODE` tắt; live mode vốn đã stream); ngoài ra
+`hal.config.FAST_VOICE` luôn false. Nó rút ngắn các khoảng chờ của chính thiết
+bị từ lúc người ngừng nói tới lúc câu hỏi tới Gemini:
+
+| Khoảng chờ | Tắt | Bật | Chỉnh bằng |
+|---|---|---|---|
+| Đồng hồ im lặng trước Smart Turn (`SILENCE_TIMEOUT_S`) | `HAL_SILENCE_TIMEOUT` (profile 1.2 s, code 2.5 s) | 0.65 s; Smart Turn vẫn giữ câu chưa nói xong | `HAL_FAST_VOICE_SILENCE_S` |
+| `endpointing` của Deepgram (`stt/autonomous.py`, `stt/deepgram.py`) | 1500 ms | 400 ms, để wake word được final xác nhận giữa câu và bước drain final xong sớm hơn | `HAL_FAST_VOICE_STT_ENDPOINTING_MS` |
+| Upload khi cửa sổ wake đang đóng (`start_realtime_turn`) | Giữ lại tới khi thu xong rồi mới flush | Stream từ frame mà partial STT mở cổng wake; chỉ commit khi wake được xác nhận (final, transcript ghép hoặc follow-up focus), không thì activity đã stream bị bỏ (`discard_open_activity("wake-unconfirmed")`) | — |
+| Chạy song song với drain final (`early_authorized`) | Chỉ khi có follow-up focus hoặc tắt wake | Thêm trường hợp wake word đã được final xác nhận | — |
+| Chờ khi Smart Turn cho là câu "chưa xong" (`TURN_END_MAX_PAUSE_S`, fallback không vượt nó) | 6.0 s | `realtime.fast_voice_pause_s` (mặc định 2.0 s, 0.8–6.0; web **Wait after you pause**); Smart Turn cho phần lớn câu hỏi tiếng Việt là chưa xong (p≈0.08), từng giữ chúng 5.5 s trên device | `HAL_FAST_VOICE_MAX_PAUSE_S` |
+| Chuyển lượt khi model im lặng (`REALTIME_RECV_QUEUE_TIMEOUT_S`; server vẫn gửi message thì lượt vẫn giữ) | 8.0 s | `realtime.fast_voice_silent_timeout_s` (mặc định 5 s, 3–8; web **Hand off when Gemini stays silent**); một session vừa kết nối lại từng im 9.5 s rồi agent chính mới nhận | `HAL_FAST_VOICE_SILENT_TIMEOUT_S` |
+| Chờ speaker-ID prepass lúc commit | 0.2 s | 0 s (danh tính được sửa ở bước sau) | `HAL_FAST_VOICE_PREPASS_JOIN_S` |
+| Cổng ngôn ngữ giữ capture | Khoảng lặng `HAL_LANG_GATE_UTTERANCE_GAP_S` (1.0 s), rồi đồng hồ im lặng đếm lại từ 0 | Khoảng lặng không vượt đồng hồ im lặng; đồng hồ vẫn đếm lại từ 0 (tính phần im lặng cuối pre-roll từng cắt mất câu của người nói nhỏ ngay đầu phiên) | — |
+| Kiểm tra rebuild sẵn sàng sau idle park | Kiểm một lần | Chờ tối đa 0.5 s cho thread prepare đã join rebuild | — |
+| Giọng trả lời | TTS của mình (vd ElevenLabs) sau khi có chữ | Âm thanh gốc của Gemini (`REALTIME_NATIVE_AUDIO` bị ép bật, giọng lấy từ `realtime.gemini.voice`) | — |
+
+**Không** đổi model Gemini: `gemini-3.8-live` thường từng chuyển hết cho agent
+chính hoặc im lặng mọi lượt trên thiết bị (2026-09-18), nên fast voice giữ model
+đang cấu hình. Tốn Gemini hơn vì nhiều lượt tới Gemini sớm hơn, kể cả audio đã
+stream rồi capture mới bị loại là tiếng ồn (đường discard sẵn có xử lý). Test:
+`hal/test/test_fast_voice.py`. Trên device 172.168.20.203 (2026-10-15/16) câu
+trả lời bắt đầu sau khoảng 2.5–4.7 s thay vì 5–10 s; wake được partial xác nhận
+sớm đạt 1.4–2.6 s. Phần còn lại là thời gian phản hồi của chính Gemini.
+
+Fast voice nói bằng giọng `realtime.gemini.voice`: os-server nhận đủ 30 giọng
+dựng sẵn của Gemini Live (`RealtimeGeminiVoiceList`, cùng bộ với `GeminiVoice`
+của HAL); trên device, câu trả lời tiếng Việt bằng giọng Achernar nghe tự nhiên.
+
+Audio gốc được phát ngay trong lượt, lúc không ai đọc microphone. Với backend
+arecord, pipe dồn lại phần audio đó (khoảng 2 s) và vòng nghe từng đọc lại như
+lời mới: mấy chữ đầu câu trả lời của chính device ("Bây giờ…", "Để tôi…") mở ra
+một lượt nghe tiếp. Khi `REALTIME_NATIVE_AUDIO` bật, `_vad_loop` giờ bỏ phần
+audio dồn đó sau mỗi lượt (`_discard_stale_mic_backlog`: frame dồn trả về ngay,
+nên dừng ở lần đọc đầu tiên phải chờ; tối đa 4 s; pump capture liên tục vốn đã
+bỏ audio lúc phát). Câu trả lời ElevenLabs không bị ảnh hưởng: chúng chủ yếu phát
+sau lượt, lúc vòng nghe đang xả mic.
+
+Gemini đôi khi viết marker im lặng là `[no speech]` thay vì `<no speech>`; mọi
+chỗ so khớp marker đều nhận cả hai, nên audio gốc của câu chỉ có marker bị giữ
+lại thay vì phát ra.
 
 ### Block `realtime` trong `config.json`
 
