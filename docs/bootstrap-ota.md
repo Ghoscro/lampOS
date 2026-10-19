@@ -1416,11 +1416,23 @@ supports fixed arguments:
   after stop to remove only their own lifecycle resources. Cleanup is bounded and
   must succeed before recovery restarts previous hardware owners.
 
-The future V2 ZIP must implement and qualify `prepare`, `serve`, `health` and
-its stop/cleanup lifecycle. Updating bootstrap/software-update alone does not add
-V1-to-V2 credentials, calibration or settings conversion to the existing ZIP.
-An existing `lamp-os` ZIP without `SERVICE_PREFLIGHT=1` is rejected for initial
-migration; do not promote it merely because the updater has been upgraded.
+The `lamp-os` ZIP built on main carries `SERVICE_PREFLIGHT=1` and
+`SERVICE_CLEANUP=1`. Its `bin/service prepare` execs the release's own
+`bin/lamp-keeper prepare` (the V2 contract from lamp-voice #1094) with
+`AUTONOMOUS_SERVICE_NAME` and `AUTONOMOUS_SERVICE_DATA` removed, as `serve`
+does for the keeper. Because it execs rather than spawns, the updater's
+120-second timeout, signals and exit status reach the keeper directly; no
+orphan keeps running after a timeout. The keeper writes the device key
+(`llm_api_key` of `/root/config/config.json`) to `/etc/lampOS/voice/credential`
+and `/etc/lampOS/policy/jev.key` where missing. It stops nothing and touches no
+hardware or unit. With no usable key it exits 0 and setup takes the key, so a
+successful prepare does **not** prove voice credentials or setup are complete.
+Packaging fails when the built `lamp-keeper` lacks `prepare` (a source older
+than #1094), and an old keeper reached anyway exits nonzero. Prepare does not
+convert V1 calibration or settings; the device profile, poses and the other
+required paths below remain per-device prerequisites. A `lamp-os` ZIP without
+`SERVICE_PREFLIGHT=1` (0.0.2 and earlier) is rejected for initial migration; do
+not promote it merely because the updater has been upgraded.
 
 The health adapter must not start a second runtime or move hardware. Readiness
 proves only the package's declared startup checks, not successful conversation,
@@ -1506,7 +1518,9 @@ make upload-lamp-os
 ```
 
 The command fetches and freezes `origin`'s `lamp-voice` commit in an isolated
-source directory. It builds the Rust workspace binaries and the OTA lifecycle
+source directory. `LAMP_OS_SOURCE_COMMIT=<40-hex SHA>` builds that reviewed
+commit instead of the branch head; the fetched commit must match it exactly,
+otherwise the command stops before building. It builds the Rust workspace binaries and the OTA lifecycle
 adapter in a disposable Linux ARM64 Docker container, using the source's pinned
 Rust toolchain and lockfiles. Host Cargo/Zig are no longer required. Prerequisites:
 Docker with Linux ARM64 support, git, curl, Python 3.10+ and authenticated gsutil.
@@ -1573,7 +1587,22 @@ to replace other robot types or all Lamps.
 
 The release inventory also carries `lamp-selftest`, `lamp-settings` and
 `lamp-setup` when built upstream; adding their executables does not enable their
-services or run self-test/reset operations. `lamp-memory-fixture`,
-`lamp-records-fixture` and the current `lamp-same-voice pairs` measurement CLI
-are development tools and are excluded. Unknown binaries still fail packaging
-so a new runtime cannot be silently omitted.
+services or run self-test/reset operations. `lamp-cloud` and `lamp-skills` are
+product services and their executables are carried (packaging fails if the
+source declares them and the build lacks them), but their units are not
+installed or started: `lamp-cloud` connects to the company broker, is opt-in and
+must not share V1 os-server's MQTT client ID, and `lamp-skills` also needs the
+product skills and settings that this ZIP does not carry yet.
+`lamp-body-measure` is a factory/provisioning tool that writes one lamp's
+`BODY_POSES` at rest; no product unit starts it, so it is excluded, and poses are
+never shipped or copied from another lamp. `lamp-memory-fixture`,
+`lamp-records-fixture`, `lamp-policy-replay` and the current
+`lamp-same-voice pairs` measurement CLI are development tools and are excluded.
+Unknown binaries still fail packaging so a new runtime cannot be silently
+omitted.
+
+The generic ZIP still renders main's `DEFAULT_UNITS` from `lampOS/deploy/units`.
+The V2 product installer uses `lampOS/deploy/product` (setup gating, more
+services and timers, settings and different paths), so a lamp migrated with this
+ZIP is not yet equivalent to a V2 product install. Building and packaging
+successfully proves the package contract, not a fully configured V2 lamp.

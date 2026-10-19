@@ -1380,11 +1380,21 @@ unit tùy ý. Entrypoint hỗ trợ các đối số cố định:
   để dọn tài nguyên lifecycle thuộc chính nó. Cleanup có timeout và phải thành
   công trước khi recovery bật lại chủ sở hữu hardware cũ.
 
-ZIP V2 tiếp theo phải triển khai và kiểm chứng `prepare`, `serve`, `health` cùng
-lifecycle stop/cleanup. Chỉ cập nhật bootstrap/software-update không bổ sung
-chuyển credentials, calibration hay settings V1 vào ZIP hiện có. ZIP `lamp-os`
-cũ thiếu `SERVICE_PREFLIGHT=1` bị từ chối migrate lần đầu; không promote chỉ vì
-updater đã nâng cấp.
+ZIP `lamp-os` build trên main có `SERVICE_PREFLIGHT=1` và `SERVICE_CLEANUP=1`.
+`bin/service prepare` exec chính `bin/lamp-keeper prepare` của release (hợp đồng
+V2 từ lamp-voice #1094), bỏ `AUTONOMOUS_SERVICE_NAME` và `AUTONOMOUS_SERVICE_DATA`
+giống cách `serve` chạy keeper. Vì exec chứ không spawn, timeout 120 giây, tín hiệu
+và mã thoát của updater đi thẳng tới keeper; không còn tiến trình mồ côi chạy
+tiếp sau timeout. Keeper ghi key của device (`llm_api_key` trong
+`/root/config/config.json`) vào `/etc/lampOS/voice/credential` và
+`/etc/lampOS/policy/jev.key` nếu chưa có. Nó không dừng gì, không đụng hardware
+hay unit. Không có key dùng được thì nó vẫn thoát 0 và để setup nhận key, nên
+prepare thành công **không** chứng minh credentials voice hay setup đã đủ.
+Packaging báo lỗi khi `lamp-keeper` được build không có `prepare` (source cũ hơn
+#1094); nếu keeper cũ vẫn được chạy thì nó thoát khác 0. Prepare không chuyển
+calibration hay settings V1; profile của device, pose và các required path bên dưới
+vẫn phải chuẩn bị riêng từng máy. ZIP `lamp-os` thiếu `SERVICE_PREFLIGHT=1` (0.0.2
+trở về trước) bị từ chối migrate lần đầu; không promote chỉ vì updater đã nâng cấp.
 
 Adapter health không được bật runtime thứ hai hoặc di chuyển hardware. Readiness
 chỉ chứng minh các kiểm tra khởi động mà gói khai báo, không chứng minh hội thoại
@@ -1465,6 +1475,8 @@ make upload-lamp-os
 ```
 
 Lệnh fetch và cố định commit `lamp-voice` từ `origin` trong thư mục source riêng.
+`LAMP_OS_SOURCE_COMMIT=<SHA 40 ký tự hex>` build đúng commit đã review thay vì
+đầu nhánh; commit fetch về phải khớp chính xác, nếu không lệnh dừng trước khi build.
 Toàn bộ binary workspace Rust và adapter lifecycle OTA được build trong Docker
 Linux ARM64 dùng toolchain/lockfile của source. Máy host không cần Cargo/Zig nữa.
 Cần Docker hỗ trợ Linux ARM64, git, curl, Python 3.10+ và gsutil đã đăng nhập.
@@ -1522,6 +1534,19 @@ Gói chung không có nghĩa được phép chuyển các robot khác hoặc to�
 
 Inventory còn mang `lamp-selftest`, `lamp-settings` và `lamp-setup` khi upstream
 build chúng; thêm executable không tự bật service hay chạy self-test/reset.
-`lamp-memory-fixture`, `lamp-records-fixture` và CLI đo `lamp-same-voice pairs`
-hiện là công cụ phát triển nên không đưa vào gói. Binary chưa phân loại vẫn làm
-packaging báo lỗi để không âm thầm bỏ sót runtime mới.
+`lamp-cloud` và `lamp-skills` là service sản phẩm nên executable được đưa vào gói
+(packaging báo lỗi nếu source khai báo mà build thiếu), nhưng unit của chúng không
+được cài hay bật: `lamp-cloud` kết nối broker công ty, là opt-in và không được dùng
+chung MQTT client ID với os-server V1; `lamp-skills` còn cần skills và settings sản
+phẩm mà ZIP này chưa mang. `lamp-body-measure` là công cụ nhà máy/provisioning ghi
+`BODY_POSES` của từng lamp lúc đứng yên; không unit sản phẩm nào chạy nó nên không
+đưa vào gói, và pose không bao giờ được ship hay chép từ lamp khác.
+`lamp-memory-fixture`, `lamp-records-fixture`, `lamp-policy-replay` và CLI đo
+`lamp-same-voice pairs` hiện là công cụ phát triển nên không đưa vào gói. Binary
+chưa phân loại vẫn làm packaging báo lỗi để không âm thầm bỏ sót runtime mới.
+
+ZIP chung vẫn render `DEFAULT_UNITS` của main từ `lampOS/deploy/units`. Installer
+sản phẩm V2 dùng `lampOS/deploy/product` (chặn theo setup, thêm service và timer,
+settings và đường dẫn khác), nên lamp migrate bằng ZIP này chưa tương đương một bản
+cài sản phẩm V2. Build và đóng gói thành công chỉ chứng minh hợp đồng của gói,
+không chứng minh lamp V2 đã cấu hình đầy đủ.

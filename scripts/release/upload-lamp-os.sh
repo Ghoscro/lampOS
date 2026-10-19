@@ -22,8 +22,12 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 remote=$(git -C "$ROOT_DIR" remote get-url origin)
 git init --bare -q "$work/source.git"
-git -C "$work/source.git" fetch --depth=1 "$remote" refs/heads/lamp-voice
+# LAMP_OS_SOURCE_COMMIT pins a reviewed lamp-voice commit; unset builds the branch head.
+pinned="${LAMP_OS_SOURCE_COMMIT:-}"
+[[ -z "$pinned" || "$pinned" =~ ^[0-9a-f]{40}$ ]] || { echo 'LAMP_OS_SOURCE_COMMIT must be a full lowercase Git SHA' >&2; exit 1; }
+git -C "$work/source.git" fetch --depth=1 "$remote" "${pinned:-refs/heads/lamp-voice}"
 commit=$(git -C "$work/source.git" rev-parse --verify 'FETCH_HEAD^{commit}')
+[[ -z "$pinned" || "$commit" = "$pinned" ]] || { echo "fetched $commit, not the pinned $pinned" >&2; exit 1; }
 mkdir -p "$work/source" "$work/build" "$work/assets"
 git -C "$work/source.git" archive "$commit" lampOS | tar -xf - -C "$work/source"
 source_dir="$work/source/lampOS"

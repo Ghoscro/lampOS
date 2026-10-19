@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs, io,
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, ExitCode},
     sync::atomic::{AtomicBool, Ordering},
@@ -144,6 +145,16 @@ fn keeper_command(release: &Path) -> Command {
     let mut command = Command::new(release.join("bin/lamp-keeper"));
     command
         .arg("serve")
+        .env_remove("AUTONOMOUS_SERVICE_NAME")
+        .env_remove("AUTONOMOUS_SERVICE_DATA");
+    command
+}
+/// The release's own preflight (lamp-voice #1094). It must not see the
+/// updater's service variables, or it would act as the installed service.
+fn prepare_command(release: &Path) -> Command {
+    let mut command = Command::new(release.join("bin/lamp-keeper"));
+    command
+        .arg("prepare")
         .env_remove("AUTONOMOUS_SERVICE_NAME")
         .env_remove("AUTONOMOUS_SERVICE_DATA");
     command
@@ -631,6 +642,12 @@ fn run() -> Result<()> {
         service: env::var("AUTONOMOUS_SERVICE_NAME").map_err(|_| "missing service name")?,
     };
     match env::args().nth(1).as_deref() {
+        // exec, not spawn: the updater's timeout kill, signals and exit status
+        // reach the keeper itself, and no orphan keeps writing after a timeout.
+        Some("prepare") => Err(format!(
+            "cannot run keeper prepare: {}",
+            prepare_command(&layout.release).exec()
+        )),
         Some("cleanup") => cleanup(&layout, &RealSystemd),
         Some("health") => {
             let health = read(&layout.data.join("adapter-health.json"))
@@ -704,7 +721,7 @@ fn run() -> Result<()> {
             let clean = cleanup(&layout, &RealSystemd);
             result.and(clean)
         }
-        _ => Err("usage: service serve|health|cleanup".into()),
+        _ => Err("usage: service prepare|serve|health|cleanup".into()),
     }
 }
 fn main() -> ExitCode {
@@ -948,6 +965,21 @@ mod tests {
         let command = keeper_command(Path::new("/package"));
         assert_eq!(command.get_program(), "/package/bin/lamp-keeper");
         assert_eq!(command.get_args().collect::<Vec<_>>(), vec!["serve"]);
+        let env: BTreeMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("AUTONOMOUS_SERVICE_NAME")),
+            Some(&None)
+        );
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("AUTONOMOUS_SERVICE_DATA")),
+            Some(&None)
+        );
+    }
+    #[test]
+    fn prepare_runs_release_keeper_without_service_identity() {
+        let command = prepare_command(Path::new("/package"));
+        assert_eq!(command.get_program(), "/package/bin/lamp-keeper");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), vec!["prepare"]);
         let env: BTreeMap<_, _> = command.get_envs().collect();
         assert_eq!(
             env.get(std::ffi::OsStr::new("AUTONOMOUS_SERVICE_NAME")),

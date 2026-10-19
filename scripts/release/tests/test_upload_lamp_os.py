@@ -111,6 +111,18 @@ class UploadLampOSTests(unittest.TestCase):
         self.assertIsNone(published)
         self.assertEqual(version, '0.0.9')
 
+    def test_pinned_source_commit_is_fetched_and_verified(self):
+        result, calls, _, _ = self.run_case(build_only=True, signing=False, LAMP_OS_SOURCE_COMMIT='a' * 40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call[0] == 'git' and 'fetch' in call and 'a' * 40 in call for call in calls))
+        self.assertFalse(any('refs/heads/lamp-voice' in call for call in calls))
+        for pin in ('b' * 40, 'lamp-voice', 'A' * 40):
+            with self.subTest(pin=pin):
+                result, calls, published, _ = self.run_case(LAMP_OS_SOURCE_COMMIT=pin)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIsNone(published)
+                self.assertFalse(any(call[:2] == ['docker', 'build'] for call in calls))
+
     def test_fetch_build_package_and_version_errors_never_publish(self):
         for flags in ({'FETCH_FAIL': '1'}, {'BUILD_FAIL': '1'}, {'PACKAGE_FAIL': '1'}, {'initial_version': 'bad'}):
             with self.subTest(flags=flags):

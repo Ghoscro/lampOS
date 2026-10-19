@@ -12,13 +12,23 @@ import zipfile
 CORE_BINARIES = ('lamp-keeper', 'lamp-voice', 'lamp-turn-end', 'lamp-body',
                  'lamp-body-worker', 'lamp-eyes', 'lamp-name', 'lamp-memory',
                  'lamp-actions', 'lamp-controls', 'lamp-expression', 'lamp-health', 'lamp-policy')
+# Optional executables are carried when built; carrying one never adds its unit.
+# lamp-cloud (company broker, opt-in, must not share V1 os-server's MQTT client ID)
+# and lamp-skills (needs the product skills and settings) stay out of DEFAULT_UNITS.
 OPTIONAL_BINARIES = ('lamp-surround', 'lamp-update', 'lamp-ears', 'lamp-schedule',
                      'lamp-tasks', 'lamp-air', 'lamp-records', 'lamp-mood', 'lamp-bus',
-                     'lamp-selftest', 'lamp-settings', 'lamp-setup')
+                     'lamp-selftest', 'lamp-settings', 'lamp-setup', 'lamp-cloud', 'lamp-skills')
 DEVELOPMENT_BINARIES = {'lamp-audio', 'lamp-body-inspect', 'lamp-ipc-probe',
     'lamp-memory-eval', 'lamp-observer', 'lamp-policy-fit', 'lamp-policy-judges',
     'lamp-sound-fixtures', 'lamp-tasks-harness-fixture', 'lamp-voice-eval',
-    'lamp-memory-fixture', 'lamp-records-fixture', 'lamp-same-voice'}
+    'lamp-memory-fixture', 'lamp-records-fixture', 'lamp-same-voice', 'lamp-policy-replay'}
+# Factory/provisioning tools are not product runtime: the V2 installer carries only
+# what a product unit starts, and none starts these. lamp-body-measure writes one
+# lamp's BODY_POSES at the bench; poses are never shipped or copied between lamps.
+PROVISIONING_BINARIES = {'lamp-body-measure'}
+# The adapter's prepare runs `lamp-keeper prepare` (lamp-voice #1094); its usage
+# line is the build's own statement that the command exists.
+KEEPER_PREPARE = b'\nlamp-keeper prepare\n'
 # Upstream verifies these same immutable bytes before inference.
 ASSETS = {
     'smart-turn-v3.2-gpu.onnx': 'ab8dc64b88713f90b571c15b714bd1330e6c883cad8763dacf65c9376dc539be',
@@ -115,7 +125,7 @@ def package(source, binaries, assets, profile, version, output, adapter, librari
         data = read_file(library_root, library.name)
         check_elf(data, library.name)
         add(f'lib/{library.name}', data)
-    unexpected = {p.name for p in Path(binaries).glob('lamp-*') if p.is_file()} - set(CORE_BINARIES + OPTIONAL_BINARIES) - DEVELOPMENT_BINARIES
+    unexpected = {p.name for p in Path(binaries).glob('lamp-*') if p.is_file()} - set(CORE_BINARIES + OPTIONAL_BINARIES) - DEVELOPMENT_BINARIES - PROVISIONING_BINARIES
     if unexpected:
         raise ValueError(f'unclassified binaries: {sorted(unexpected)}; update the release inventory')
     binary_hashes = {}
@@ -129,6 +139,9 @@ def package(source, binaries, assets, profile, version, output, adapter, librari
         binary_hashes[name] = digest(data)
         part = name.removeprefix('lamp-')
         if name == 'lamp-keeper':
+            if KEEPER_PREPARE not in data:
+                raise ValueError('lamp-keeper lacks the prepare command (source predates lamp-voice #1094); '
+                                 'an initial migration package cannot be built from it')
             add('bin/lamp-keeper', data, True)
         elif name in ('lamp-voice', 'lamp-turn-end'):
             # The turn worker and model must live beside the voice executable.
@@ -211,6 +224,8 @@ def package(source, binaries, assets, profile, version, output, adapter, librari
                 required_paths.append(line.split('=', 1)[1])
         add(f'units/{unit}', text.encode())
     add('SERVICE_CLEANUP', b'1\n')
+    # The updater runs `bin/service prepare` before stopping V1; initial migration requires it.
+    add('SERVICE_PREFLIGHT', b'1\n')
     add('package-manifest.json', (json.dumps({'format': 1, **({'profile_path': '/etc/lampOS/package-profile.json',
             'placeholders': sorted(declared_placeholders)} if generic else {'unit_id': substitutions['UNIT_ID']}),
         'required_paths': sorted(set(required_paths)), 'units': sorted(units)}, sort_keys=True) + '\n').encode())
