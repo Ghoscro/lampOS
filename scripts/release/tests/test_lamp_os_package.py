@@ -26,6 +26,7 @@ class PackageTest(unittest.TestCase):
         struct.pack_into('<HH', elf, 16, 3, 183)
         for name in pkg.CORE_BINARIES:
             (self.binaries / name).write_bytes(elf + name.encode())
+        (self.binaries / 'lamp-keeper').write_bytes(elf + b'usage\nlamp-keeper prepare\nlamp-keeper status\n')
         self.adapter = self.root / 'adapter'
         self.adapter.write_bytes(elf)
         self.libraries = self.root / 'lib'
@@ -91,6 +92,41 @@ class PackageTest(unittest.TestCase):
                 self.assertNotIn('units/' + name + '.service', names)
             for name in development:
                 self.assertFalse(any(path.endswith('/' + name) for path in names))
+
+    def test_cloud_skills_carried_without_units_and_tools_excluded(self):
+        runtime = ('lamp-cloud', 'lamp-skills')
+        excluded = ('lamp-body-measure', 'lamp-policy-replay')
+        for name in runtime + excluded:
+            (self.binaries / name).write_bytes(self.adapter.read_bytes() + name.encode())
+        manifest = self.build()
+        with zipfile.ZipFile(self.output) as archive:
+            names = archive.namelist()
+        for name in runtime:
+            part = name.removeprefix('lamp-')
+            self.assertIn(f'runtime/{part}/{manifest["binaries"][name]}/{name}', names)
+            self.assertNotIn(f'units/{name}.service', names)
+        for name in excluded:
+            self.assertNotIn(name, manifest['binaries'])
+            self.assertFalse(any(path.endswith('/' + name) for path in names))
+
+    def test_cloud_and_skills_declared_in_source_must_be_built(self):
+        for part in ('cloud', 'skills'):
+            with self.subTest(part=part):
+                self.write_source(f'crates/{part}/Cargo.toml', f'[package]\nname="lamp-{part}"\n'.encode())
+                with self.assertRaisesRegex(ValueError, f'missing runtime binary declared in source: lamp-{part}'):
+                    self.build()
+                (self.source / f'crates/{part}/Cargo.toml').unlink()
+
+    def test_preflight_marker_requires_keeper_prepare(self):
+        self.build()
+        with zipfile.ZipFile(self.output) as archive:
+            self.assertEqual(archive.read('SERVICE_PREFLIGHT'), b'1\n')
+            self.assertIn(b'\nlamp-keeper prepare\n', archive.read('bin/lamp-keeper'))
+        (self.binaries / 'lamp-keeper').write_bytes(self.adapter.read_bytes() + b'usage\nlamp-keeper status\n')
+        self.output.unlink()
+        with self.assertRaisesRegex(ValueError, 'lacks the prepare command'):
+            self.build()
+        self.assertFalse(self.output.exists())
 
     def test_complete_deterministic_archive_and_modes(self):
         manifest = self.build()
