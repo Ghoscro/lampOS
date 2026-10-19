@@ -135,7 +135,7 @@ export function RealtimeSection({
               <span style={{ minWidth: 0 }}>
                 <span style={{ whiteSpace: "nowrap" }}>Faster replies</span>
                 <span style={{ display: "block", fontSize: 12, color: C.textDim, marginTop: 3 }}>
-                  Answers start about twice as fast (around 3 s instead of 7 s): your speech is sent while you are still talking, the end of your turn is detected sooner, and replies play in the Gemini voice chosen below. Main-agent replies keep the Voice page&apos;s voice.
+                  Answers usually start within 1.5–3 s instead of 5–10 s: your speech is sent while you are still talking, the end of your turn is detected sooner, and replies play in the Gemini voice chosen below. Main-agent replies keep the Voice page&apos;s voice.
                 </span>
                 <span style={{ display: "block", fontSize: 12, color: C.textDim, marginTop: 3 }}>
                   Uses more Gemini tokens. A long pause mid-sentence may end your turn early; set how long to wait below.

@@ -1020,6 +1020,10 @@ type WakeSettings struct {
 	FollowupCustom bool `json:"followup_custom"`
 	FollowupMinS   int  `json:"followup_min_s"`
 	FollowupMaxS   int  `json:"followup_max_s"`
+	// TapChime and TapLight are the tap-to-talk recording cues (voice_input_mode
+	// "tap_to_talk"); at least one stays on. TapLight uses the same effects and speeds.
+	TapChime bool          `json:"tap_chime"`
+	TapLight WakeLightLook `json:"tap_light"`
 	// Applying is true when the set reply was sent while HAL was still restarting for a gate change.
 	Applying bool `json:"applying,omitempty"`
 }
@@ -1040,11 +1044,14 @@ type WakeSettingsSetData struct {
 	Chime     *bool             `json:"chime,omitempty"`
 	Light     *config.WakeLight `json:"light,omitempty"`
 	FollowupS *int              `json:"followup_s,omitempty"`
+	TapChime  *bool             `json:"tap_chime,omitempty"`
+	TapLight  *config.WakeLight `json:"tap_light,omitempty"`
 }
 
 // Empty reports a payload that changes nothing.
 func (d WakeSettingsSetData) Empty() bool {
-	return d.Enabled == nil && d.Phrases == nil && d.Chime == nil && d.Light == nil && d.FollowupS == nil
+	return d.Enabled == nil && d.Phrases == nil && d.Chime == nil && d.Light == nil && d.FollowupS == nil &&
+		d.TapChime == nil && d.TapLight == nil
 }
 
 // UpdateRequest maps the payload onto the shared PUT /api/device/config request.
@@ -1055,6 +1062,8 @@ func (d WakeSettingsSetData) UpdateRequest() UpdateConfigRequest {
 		WakeChime:     d.Chime,
 		WakeLight:     d.Light,
 		WakeFollowupS: d.FollowupS,
+		TapChime:      d.TapChime,
+		TapLight:      d.TapLight,
 	}
 }
 
