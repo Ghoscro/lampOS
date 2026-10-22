@@ -1289,6 +1289,20 @@ takes **1.9 s** against **5m35s** to compile. Anything outside that marker —
 a dev Mac, a future 3.13 — falls back to the PyPI sdist and compiles, so
 `uv sync --extra aec` always works; only the fast path is pinned.
 
+`webrtcvad` takes the same path. It is a core HAL dependency, not an extra, and
+PyPI ships it only as an sdist, so every HAL install compiled its C extension on
+the device — and a device whose C toolchain could not build it could not install
+HAL at all. The wheel is built and published the same way and lives on its own
+tag (`wheels/webrtcvad-<version>`):
+
+```bash
+scripts/release/build-webrtcvad-wheel.sh <device-ip>   # → dist/webrtcvad/*.whl
+make upload-webrtcvad-wheel                            # → GitHub release, prints URL + sha256
+```
+
+`hal/pyproject.toml` pins it with the same linux/aarch64/CPython 3.12 marker;
+every other platform still compiles the PyPI sdist.
+
 The main VAD loop is wrapped, and with `HAL_WARM_MIC=true` (now the default)
 the mic stays open through playback, so cancellation runs during the device's
 own speech. The reverb gate is deliberately left uncancelled so its timing is

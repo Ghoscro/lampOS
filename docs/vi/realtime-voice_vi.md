@@ -1247,6 +1247,20 @@ giây**, so với **5m35s** nếu compile. Nằm ngoài marker đó — máy Mac
 3.13 sau này — sẽ rơi về sdist trên PyPI và compile, nên `uv sync --extra aec`
 lúc nào cũng chạy; chỉ đường nhanh mới được pin.
 
+`webrtcvad` đi cùng đường đó. Đây là dependency lõi của HAL, không phải extra, và
+PyPI chỉ phát hành nó dạng sdist, nên mọi lần cài HAL đều phải compile phần mở
+rộng C ngay trên thiết bị — thiết bị nào có bộ công cụ C không build được thì
+không cài được HAL. Wheel được build và publish theo cùng cách, trên tag riêng
+(`wheels/webrtcvad-<version>`):
+
+```bash
+scripts/release/build-webrtcvad-wheel.sh <device-ip>   # → dist/webrtcvad/*.whl
+make upload-webrtcvad-wheel                            # → GitHub release, in ra URL + sha256
+```
+
+`hal/pyproject.toml` pin nó với cùng marker linux/aarch64/CPython 3.12; mọi nền
+tảng khác vẫn compile từ sdist trên PyPI.
+
 Vòng VAD chính được bọc, và với `HAL_WARM_MIC=true` (nay là mặc định) mic vẫn mở
 suốt lúc phát, nên việc khử chạy ngay trong lúc thiết bị đang nói. Cổng reverb
 cố ý không khử để giữ nguyên timing.
