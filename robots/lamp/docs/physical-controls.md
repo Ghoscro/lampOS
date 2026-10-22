@@ -295,7 +295,7 @@ Purple identifies the sleep tier; red blink vs red solid differentiates shutdown
 
 The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. Shared `HoldLEDFeedback` owns blinking, release cleanup and final action feedback; each input supplies its detected tier. It reads the color at the moment it paints, because the overlay merges the table in place at boot.
 
-Per-edge debounce is 200 ms (press and release ticks tracked independently so a quick tap isn't dropped while bouncy repeats of the same edge are filtered).
+Debounce is 200 ms on one clock shared by both directions: an edge inside the window after an accepted press or release is contact bounce and is dropped. 50 ms after the line goes quiet, the handler reads the line level back and applies it if a dropped edge left the state wrong (logged as `line settled … with its edge debounce-dropped`), dating the change at the last edge. So a tap shorter than the window still releases, about 50 ms late, and a bounced release can never leave the button "held". While a hold is armed, the watcher also reads the line each 100 ms and ends the hold as soon as the line reads released, so a lost release edge cannot grow into a sleep, shutdown or factory-reset hold. (Separate press/release clocks, used before, let a release bounce end a tap and the next press bounce start a phantom hold that the user's next tap released as a 10 s+ factory reset.)
 
 ## MPR121 detection (`hal/drivers/mpr121.py`)
 

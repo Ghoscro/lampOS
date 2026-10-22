@@ -289,7 +289,7 @@ Màu tím nhận diện mức sleep; đỏ nháy vs đỏ đứng phân biệt s
 
 Ba màu này là preset chứ không phải hằng nhúng cứng trong driver: `BUTTON_LED_PRESETS` trong `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), device override được qua section `button_led` của `robots/<id>/presets.json` giống mọi bảng LED khác. `HoldLEDFeedback` dùng chung xử lý nháy, dọn phản hồi khi nhả và phản hồi chốt action; mỗi input cung cấp mức giữ đã detect. Nó đọc màu ngay lúc paint, vì overlay merge bảng tại chỗ lúc boot.
 
-Debounce mỗi edge là 200 ms (tick nhấn và nhả track độc lập để tap nhanh không bị drop trong khi bounce lặp của cùng một edge bị lọc).
+Debounce là 200 ms trên một đồng hồ chung cho cả hai chiều: edge nằm trong cửa sổ sau một lần nhấn hoặc nhả đã nhận là bounce và bị bỏ. 50 ms sau khi line im, handler đọc lại level của line và áp dụng nếu một edge bị bỏ làm state sai (log `line settled … with its edge debounce-dropped`), tính thời điểm thay đổi theo edge cuối. Nhờ vậy tap ngắn hơn cửa sổ vẫn được nhả, trễ khoảng 50 ms, và bounce lúc nhả không bao giờ để nút ở trạng thái "đang giữ". Khi đang giữ, watcher cũng đọc line mỗi 100 ms và kết thúc lần giữ ngay khi line đọc ra nhả, nên mất edge nhả không thể biến thành lần giữ sleep, shutdown hay factory reset. (Trước đây nhấn và nhả dùng hai đồng hồ riêng, nên bounce lúc nhả kết thúc tap và bounce nhấn kế tiếp mở một lần giữ ảo; tap sau đó của người dùng nhả nó thành factory reset trên 10 s.)
 
 ## Detect MPR121 (`hal/drivers/mpr121.py`)
 
